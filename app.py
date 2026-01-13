@@ -22,13 +22,9 @@ SHEET_NAME = "asthma_db"
 PATIENTS_GID = "0"
 VISITS_GID = "1491996218"
 
-# 🔐 รหัสผ่านเจ้าหน้าที่ (ดึงจาก Secrets เพื่อความปลอดภัย)
-if "admin_password" in st.secrets:
-    ADMIN_PASSWORD = st.secrets["admin_password"]
-else:
-    # กรณีลืมตั้งค่าใน Secrets จะแจ้งเตือนและหยุดทำงาน
-    st.error("❌ System Error: ไม่พบการตั้งค่า 'admin_password' ใน Secrets")
-    st.stop()
+# 🔐 ดึงรหัสผ่านเจ้าหน้าที่จาก Secrets (ถ้าไม่มีให้ใช้ 1234 เป็นค่าเริ่มต้น)
+# ควรตั้งค่าใน .streamlit/secrets.toml หรือ Cloud Settings
+ADMIN_PASSWORD = st.secrets.get("admin_password", "1234")
 
 # ==========================================
 # 2. CALCULATION FORMULAS
@@ -40,7 +36,7 @@ def calculate_predicted_pefr(age, height_cm, gender_prefix):
     prefix = str(gender_prefix).strip()
     if any(x in prefix for x in ['นาง', 'น.ส.', 'หญิง', 'ด.ญ.', 'Miss', 'Mrs.']):
         is_male = False
-    
+     
     if age < 15:
         predicted = -425.5714 + (5.2428 * height_cm)
         return max(predicted, 100)
@@ -67,6 +63,7 @@ def load_data_fast(gid):
         url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={gid}"
         df = pd.read_csv(url, on_bad_lines='skip')
         if 'hn' in df.columns:
+            # แปลง HN ให้เป็น text 7 หลักเสมอ
             df['hn'] = df['hn'].astype(str).str.split('.').str[0].str.strip().apply(lambda x: x.zfill(7))
         return df
     except Exception as e:
@@ -75,17 +72,11 @@ def load_data_fast(gid):
 
 def connect_to_gsheet():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-    
-    # ---------------------------------------------------------
-    # ☁️ CLOUD & LOCAL SUPPORT (Automatic Detection)
-    # ---------------------------------------------------------
     try:
-        # 1. ลองดึงจาก Streamlit Secrets (สำหรับบน Cloud)
         if "gcp_service_account" in st.secrets:
             creds_dict = st.secrets["gcp_service_account"]
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         else:
-            # 2. ถ้าไม่มี Secrets ให้ลองหาไฟล์ local (สำหรับในคอม)
             creds = ServiceAccountCredentials.from_json_keyfile_name('service_account.json', scope)
             
         client = gspread.authorize(creds)
@@ -113,12 +104,13 @@ def save_visit_data(data_dict):
     sh = connect_to_gsheet()
     worksheet = sh.worksheet("visits")
     row_to_append = [
-        data_dict["hn"], data_dict["date"], data_dict["pefr"],
+        str(data_dict["hn"]), # ลบ ' ออกแล้ว (ต้องตั้งค่า Sheet เป็น Plain Text)
+        data_dict["date"], data_dict["pefr"],
         data_dict["control_level"], data_dict["controller"], data_dict["reliever"],
         data_dict["adherence"], data_dict["drp"], data_dict["advice"],
         data_dict["technique_check"], data_dict["next_appt"], 
         data_dict["note"],
-        data_dict["is_new_case"]  
+        data_dict["is_new_case"] # เพิ่มคอลัมน์ใหม่
     ]
     worksheet.append_row(row_to_append)
     load_data_staff.clear()
@@ -127,7 +119,8 @@ def save_visit_data(data_dict):
 def save_patient_data(data_dict):
     sh = connect_to_gsheet()
     worksheet = sh.worksheet("patients")
-    hn_val = f"'{data_dict['hn']}" 
+    # ลบ ' ออกเพื่อให้ HN ลงเป็นตัวเลข (ต้องตั้งค่า Sheet เป็น Plain Text)
+    hn_val = str(data_dict['hn']) 
     row_to_append = [
         hn_val,
         data_dict["prefix"],
@@ -181,13 +174,13 @@ def check_technique_status(pt_visits_df):
 def plot_pefr_chart(visits_df, reference_pefr):
     data = visits_df.copy()
     data = data[data['pefr'] > 0]
-    
+     
     if data.empty:
         return alt.Chart(pd.DataFrame({'date':[], 'pefr':[]})).mark_text(text="ไม่มีข้อมูลกราฟ PEFR")
 
     data['date'] = pd.to_datetime(data['date'])
     ref_val = reference_pefr if reference_pefr > 0 else data['pefr'].max()
-    
+     
     def get_color(val):
         if val >= ref_val * 0.8: return 'green'
         elif val >= ref_val * 0.5: return 'orange'
@@ -224,7 +217,7 @@ def render_dashboard(visits_df):
     control_counts = latest_visits['control_level'].value_counts().reset_index()
     control_counts.columns = ['status', 'count']
     
-    # กำหนดสี: Controlled=เขียว, Partly=เหลือง, Uncontrolled=แดง
+    # กำหนดสี
     domain = ['Controlled', 'Partly Controlled', 'Uncontrolled']
     range_ = ['#66BB6A', '#FFCA28', '#EF5350'] # Green, Amber, Red
 
@@ -247,10 +240,10 @@ def render_dashboard(visits_df):
     # ----------------------------------
     st.subheader("2. ปริมาณงานรายเดือน (Workload)")
     
-    # นับจำนวน Visit ทั้งหมดต่อเดือน
+    # นับจำนวน Visit ทั้งหมด
     monthly_visits = df.groupby('month_year').size().reset_index(name='total_visits')
     
-    # นับจำนวน New Cases ต่อเดือน (เช็คว่า column is_new_case เป็น TRUE หรือไม่)
+    # นับจำนวน New Cases
     if 'is_new_case' in df.columns:
         new_cases = df[df['is_new_case'].astype(str).str.upper() == 'TRUE']
         monthly_new = new_cases.groupby('month_year').size().reset_index(name='new_cases')
@@ -259,8 +252,6 @@ def render_dashboard(visits_df):
 
     # รวมตาราง
     trend_df = pd.merge(monthly_visits, monthly_new, on='month_year', how='left').fillna(0)
-    
-    # แปลงข้อมูลเป็น Long Format เพื่อพล็อตกราฟซ้อน
     trend_long = trend_df.melt('month_year', var_name='type', value_name='count')
     
     line_chart = alt.Chart(trend_long).mark_line(point=True).encode(
@@ -273,16 +264,15 @@ def render_dashboard(visits_df):
     st.altair_chart(line_chart, use_container_width=True)
 
     # ----------------------------------
-    # KPI 3: ตาราง 10 อันดับยา Controller ที่ใช้บ่อย
+    # KPI 3: ยา Controller
     # ----------------------------------
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("3. การใช้ยา Controller")
-        # แยกรายการยาที่คั่นด้วย comma ออกมานับ
         meds = df['controller'].astype(str).str.split(', ').explode()
         med_counts = meds.value_counts().reset_index()
         med_counts.columns = ['medicine', 'usage_count']
-        med_counts = med_counts[med_counts['medicine'] != 'nan'] # ตัดค่าว่าง
+        med_counts = med_counts[med_counts['medicine'] != 'nan']
         
         bar_med = alt.Chart(med_counts.head(10)).mark_bar().encode(
             x=alt.X('usage_count', title='จำนวนครั้งที่จ่าย'),
@@ -293,7 +283,7 @@ def render_dashboard(visits_df):
         st.altair_chart(bar_med, use_container_width=True)
     
     # ----------------------------------
-    # KPI 4: Action List (คนไข้ที่ต้องดูแลพิเศษ)
+    # KPI 4: Action List
     # ----------------------------------
     with c2:
         st.subheader("🚨 กลุ่มเสี่ยง (Uncontrolled)")
@@ -313,17 +303,17 @@ if target_hn:
     # ------------------------------------------------
     # 🟢 PATIENT VIEW (Fast Mode) - NO LOGIN REQUIRED
     # ------------------------------------------------
-    
+     
     patients_db_fast = load_data_fast(PATIENTS_GID)
     visits_db_fast = load_data_fast(VISITS_GID)
 
     target_hn = str(target_hn).strip().zfill(7)
     patient = patients_db_fast[patients_db_fast['hn'] == target_hn]
-    
+     
     if not patient.empty:
         pt_data = patient.iloc[0]
         masked_name = f"{pt_data['prefix']}{mask_text(pt_data['first_name'])} {mask_text(pt_data['last_name'])}"
-        
+         
         dob = pd.to_datetime(pt_data['dob'])
         age = (datetime.now() - dob).days // 365
         height = pt_data.get('height', 0)
@@ -339,7 +329,7 @@ if target_hn:
         st.divider()
 
         pt_visits = visits_db_fast[visits_db_fast['hn'] == target_hn].copy()
-        
+         
         tech_status, tech_days, tech_last_date = check_technique_status(pt_visits)
         if tech_status == "overdue": st.error(f"⚠️ เตือน: ขาดทบทวนพ่นยา {tech_days} วัน")
         elif tech_status == "ok": st.success(f"✅ เทคนิคพ่นยา: ปกติ (เหลือ {tech_days} วัน)")
@@ -356,7 +346,7 @@ if target_hn:
             m2.metric("% มาตรฐาน", f"{pct_std}%", help=f"เทียบค่ามาตรฐาน: {int(predicted_pefr)}")
             m3.markdown(f"โซน: :{zone_color}[**{zone_name}**]")
             st.write(f"**💊 Controller:** {last_visit.get('controller', '-')}")
-            
+             
             if 'note' in last_visit and str(last_visit['note']).strip() != "" and str(last_visit['note']).lower() != "nan":
                 st.info(f"ℹ️ **หมายเหตุ:** {last_visit['note']}")
 
@@ -364,7 +354,7 @@ if target_hn:
             chart = plot_pefr_chart(pt_visits, ref_pefr)
             st.altair_chart(chart, use_container_width=True)
             st.caption(f"เส้นประ (ค่าเป้าหมาย): {int(ref_pefr)}")
-            
+             
             with st.expander("ดูประวัติ"):
                 st.dataframe(pt_visits.sort_values(by="date", ascending=False), hide_index=True)
         else:
@@ -388,10 +378,7 @@ else:
         with col1:
             password = st.text_input("กรุณาใส่รหัสผ่าน", type="password")
             if st.button("Login"):
-                # ดึงรหัสผ่านจาก Secrets (ถ้ามี) หรือใช้ค่า Default
-                valid_password = st.secrets.get("admin_password", "1234")
-                
-                if password == valid_password:
+                if password == ADMIN_PASSWORD:
                     st.session_state.logged_in = True
                     st.rerun()
                 else:
@@ -405,11 +392,9 @@ else:
 
     st.sidebar.success(f"สถานะ: เจ้าหน้าที่ (Logged In)")
     
-    # โหลดข้อมูล (Caching)
     patients_db = load_data_staff("patients")
     visits_db = load_data_staff("visits")
 
-    # เมนูหลัก (เพิ่ม Dashboard)
     mode = st.sidebar.radio("เมนูหลัก", ["🔍 ค้นหา/บันทึกอาการ", "➕ ลงทะเบียนผู้ป่วยใหม่", "📊 Dashboard ภาพรวม"])
 
     # ==========================================
@@ -582,7 +567,7 @@ else:
                         "adherence": actual_adherence,
                         "drp": v_drp, 
                         "advice": v_adv,
-                        "technique_check": "ทำ" if v_tech else "ไม่",
+                        "technique_check": "ทำ" if v_tech else "ไม่ทำ",
                         "next_appt": str(v_next),
                         "note": final_note,
                         "is_new_case": "TRUE" if v_is_new else "FALSE" # <--- บันทึกค่า New Case
@@ -597,32 +582,21 @@ else:
             st.divider()
             st.subheader("📇 Asthma Card")
             
-            # ---------------------------------------------------------
-            # 🌐 URL CONFIGURATION
-            # ---------------------------------------------------------
-            # ดึง URL จาก Secrets (Cloud) หรือใช้ Localhost (เครื่องตัวเอง)
+            # URL Management from Secrets
             if "deploy_url" in st.secrets:
                 base_url = st.secrets["deploy_url"]
             else:
                 base_url = "http://localhost:8501"
 
-            # สร้าง Link (ไม่ต้องมี / ซ้ำซ้อน)
             link = f"{base_url}/?hn={selected_hn}"
             
-            # จัด Layout การแสดงผล
-            c_q, c_t = st.columns([1, 2])
-            
-            # สร้าง QR Code
+            c_q, c_t = st.columns([1,2])
             c_q.image(generate_qr(link), width=150)
             
-            # แสดงข้อมูลข้างๆ QR
             with c_t:
-                st.markdown(f"**ชื่อ:** {pt_data['first_name']} {pt_data['last_name']}")
+                st.markdown(f"**{pt_data['first_name']} {pt_data['last_name']}**")
                 st.markdown(f"**HN:** `{selected_hn}`")
-                st.markdown(f"**Predicted PEFR:** {int(predicted_pefr)}")
-                # ปุ่มเปิดลิงก์สะดวกๆ
+                st.markdown(f"Predicted PEFR: {int(predicted_pefr)}")
                 st.link_button("🔗 เปิดลิงก์คนไข้", link, type="primary")
             
-            # แสดง URL ด้านล่างเพื่อตรวจสอบความถูกต้อง
             st.caption(f"Direct Link: {link}")
-
