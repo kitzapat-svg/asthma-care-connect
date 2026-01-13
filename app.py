@@ -527,7 +527,7 @@ else:
                 except Exception as e:
                     st.error(f"เกิดข้อผิดพลาด: {e}")
 
-    # ==========================================
+# ==========================================
     # 🔍 MODE 3: SEARCH & VISIT RECORD
     # ==========================================
     else:
@@ -544,13 +544,55 @@ else:
             height = pt_data.get('height', 0)
             predicted_pefr = calculate_predicted_pefr(age, height, pt_data['prefix'])
             
+            # คำนวณค่าอ้างอิงสำหรับคำนวณ % (ใช้ Predicted หรือ Personal Best)
+            ref_pefr = predicted_pefr if predicted_pefr > 0 else pt_data['best_pefr']
+            
             st.title(f"{pt_data['prefix']}{pt_data['first_name']} {pt_data['last_name']}")
+            
+            # --- ข้อมูลพื้นฐาน ---
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("HN", pt_data['hn'])
             c2.metric("อายุ", f"{age} ปี")
             c3.metric("ส่วนสูง", f"{height} cm")
             c4.metric("Standard PEFR", f"{int(predicted_pefr)}")
 
+            # --- 🆕 ส่วนที่เพิ่ม: แสดงสถานะล่าสุด (เหมือน Patient View) ---
+            if not pt_visits.empty:
+                # เรียงวันที่เพื่อให้ได้ visit ล่าสุดจริงๆ
+                pt_visits_sorted = pt_visits.sort_values(by="date")
+                last_visit = pt_visits_sorted.iloc[-1]
+                
+                # คำนวณโซนและ %
+                current_pefr = last_visit['pefr']
+                zone_name, zone_color, advice = get_action_plan_zone(current_pefr, ref_pefr)
+                pct_std = get_percent_predicted(current_pefr, ref_pefr)
+                
+                # แสดงผล
+                st.markdown("---")
+                st.info(f"📋 **สถานะล่าสุด ({last_visit['date']})**")
+                
+                s1, s2, s3, s4 = st.columns(4)
+                
+                pefr_show = current_pefr if current_pefr > 0 else "N/A"
+                s1.metric("PEFR ล่าสุด", f"{pefr_show}")
+                
+                s2.metric("% มาตรฐาน", f"{pct_std}%", help=f"เทียบค่ามาตรฐาน: {int(ref_pefr)}")
+                
+                with s3:
+                    st.markdown("โซนอาการ")
+                    st.markdown(f":{zone_color}[**{zone_name}**]")
+                
+                with s4:
+                    st.markdown("ระดับการควบคุม")
+                    ctrl = last_visit.get('control_level', '-')
+                    if ctrl == "Controlled": st.success(ctrl)
+                    elif ctrl == "Partly Controlled": st.warning(ctrl)
+                    elif ctrl == "Uncontrolled": st.error(ctrl)
+                    else: st.write(ctrl)
+
+            # --- Alerts ---
+            st.divider()
+            
             # Alert Tech
             tech_status, tech_days, tech_last_date = check_technique_status(pt_visits)
             if tech_status == "overdue": st.error(f"🚨 ขาดทบทวนพ่นยา {tech_days} วัน!")
@@ -559,18 +601,15 @@ else:
             
             # Alert DRP
             if not pt_visits.empty:
-                pt_visits_sorted = pt_visits.sort_values(by="date")
-                last_visit_row = pt_visits_sorted.iloc[-1]
+                last_visit_row = pt_visits.sort_values(by="date").iloc[-1] # ใช้ตัวแปร Local
                 last_drp_text = str(last_visit_row['drp']).strip()
                 if last_drp_text != "" and last_drp_text != "-" and last_drp_text.lower() != "nan":
                     d_date = pd.to_datetime(last_visit_row['date']).strftime('%d/%m/%Y')
                     st.warning(f"💊 **DRP ล่าสุด ({d_date}):** {last_drp_text}")
 
-            st.divider()
             st.subheader("📈 กราฟติดตามอาการ")
             if not pt_visits.empty:
-                ref_val = predicted_pefr if predicted_pefr > 0 else pt_data['best_pefr']
-                chart = plot_pefr_chart(pt_visits, ref_val)
+                chart = plot_pefr_chart(pt_visits, ref_pefr)
                 st.altair_chart(chart, use_container_width=True)
 
             with st.expander("ประวัติการรักษา"):
@@ -582,7 +621,7 @@ else:
             with st.form("new_visit", clear_on_submit=True):
                 col_a, col_b = st.columns(2)
                 v_date = col_a.date_input("วันที่", value=datetime.today())
-                v_is_new = col_a.checkbox("🆕 เป็นผู้ป่วยรายใหม่ (New Case)") # <--- Checkbox ใหม่
+                v_is_new = col_a.checkbox("🆕 เป็นผู้ป่วยรายใหม่ (New Case)") 
                 
                 with col_b:
                     v_pefr = st.number_input("PEFR (L/min)", 0, 900, step=10)
@@ -635,7 +674,7 @@ else:
                         "technique_check": "ทำ" if v_tech else "ไม่ทำ",
                         "next_appt": str(v_next),
                         "note": final_note,
-                        "is_new_case": "TRUE" if v_is_new else "FALSE" # <--- บันทึกค่า New Case
+                        "is_new_case": "TRUE" if v_is_new else "FALSE"
                     }
                     try:
                         save_visit_data(new_data)
@@ -647,7 +686,6 @@ else:
             st.divider()
             st.subheader("📇 Asthma Card")
             
-            # ใช้ BASE_URL ที่เราตั้งค่าไว้ตอนต้น (Safe URL)
             link = f"{BASE_URL}/?hn={selected_hn}"
             
             c_q, c_t = st.columns([1,2])
