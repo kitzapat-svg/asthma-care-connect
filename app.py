@@ -18,14 +18,11 @@ st.set_page_config(page_title="Asthma Care Connect", layout="centered", page_ico
 SHEET_ID = "1LF9Yi6CXHaiITVCqj9jj1agEdEE9S-37FwnaxNIlAaE"
 SHEET_NAME = "asthma_db"
 
-# GID สำหรับโหลดเร็ว (Patient View)
-PATIENTS_GID = "0"
-VISITS_GID = "1491996218"
+# ✅ UPDATED: ใช้ชื่อ Tab แทน GID เพื่อเรียกผ่าน API
+PATIENTS_SHEET_NAME = "patients"
+VISITS_SHEET_NAME = "visits"
 
 # --- 🛡️ SYSTEM CONFIGURATION (Auto-Fallback) ---
-# ส่วนนี้จะดักจับ Error กรณีไม่มีไฟล์ secrets.toml ในเครื่อง (Localhost)
-# เพื่อให้โปรแกรมยังทำงานต่อได้โดยใช้ค่า Default
-
 # 1. ตั้งค่ารหัสผ่าน (Password)
 try:
     if "admin_password" in st.secrets:
@@ -33,7 +30,6 @@ try:
     else:
         ADMIN_PASSWORD = "1234"
 except Exception:
-    # กรณีหาไฟล์ secrets ไม่เจอเลย
     ADMIN_PASSWORD = "1234"
 
 # 2. ตั้งค่า URL (Base URL)
@@ -56,7 +52,7 @@ def calculate_predicted_pefr(age, height_cm, gender_prefix):
     prefix = str(gender_prefix).strip()
     if any(x in prefix for x in ['นาง', 'น.ส.', 'หญิง', 'ด.ญ.', 'Miss', 'Mrs.']):
         is_male = False
-     
+      
     if age < 15:
         predicted = -425.5714 + (5.2428 * height_cm)
         return max(predicted, 100)
@@ -77,20 +73,8 @@ def get_percent_predicted(current_pefr, predicted_pefr):
 # 3. HELPER FUNCTIONS
 # ==========================================
 
-@st.cache_data(ttl=10)
-def load_data_fast(gid):
-    try:
-        url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={gid}"
-        df = pd.read_csv(url, on_bad_lines='skip')
-        if 'hn' in df.columns:
-            # แปลง HN ให้เป็น text 7 หลักเสมอ
-            df['hn'] = df['hn'].astype(str).str.split('.').str[0].str.strip().apply(lambda x: x.zfill(7))
-        return df
-    except Exception as e:
-        st.error(f"โหลดข้อมูลไม่สำเร็จ (Fast Mode): {e}")
-        st.stop()
-
 def connect_to_gsheet():
+    """ฟังก์ชันเชื่อมต่อ Google Sheets แบบรวมศูนย์"""
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     
     # ☁️ Priority 1: ลองดึงจาก Secrets (สำหรับ Cloud)
@@ -99,24 +83,66 @@ def connect_to_gsheet():
             creds_dict = st.secrets["gcp_service_account"]
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             client = gspread.authorize(creds)
-            return client.open_by_key(SHEET_ID)
+            return client
     except Exception:
-        pass # ถ้าดึงจาก Secrets ไม่ได้ หรือไม่มีไฟล์ Secrets ให้ข้ามไป Priority 2
+        pass 
 
     # 💻 Priority 2: ลองดึงจากไฟล์ JSON ในเครื่อง (สำหรับ Localhost)
     try:
         creds = ServiceAccountCredentials.from_json_keyfile_name('service_account.json', scope)
         client = gspread.authorize(creds)
-        return client.open_by_key(SHEET_ID)
+        return client
     except Exception as e:
         st.error("❌ ไม่สามารถเชื่อมต่อ Google Sheets ได้")
-        st.error("กรุณาตรวจสอบว่ามีไฟล์ 'service_account.json' ในโฟลเดอร์ หรือตั้งค่า Secrets บน Cloud แล้ว")
+        st.error("กรุณาตรวจสอบว่ามีไฟล์ 'service_account.json' หรือตั้งค่า Secrets แล้ว")
+        st.stop()
+
+@st.cache_data(ttl=60)
+def load_data_fast(worksheet_name):
+    """
+    ✅ NEW SECURE VERSION: ดึงข้อมูลผ่าน Service Account API 
+    แต่ใช้ get_all_values + Caching เพื่อความเร็ว
+    """
+    try:
+        client = connect_to_gsheet()
+        sh = client.open_by_key(SHEET_ID)
+        worksheet = sh.worksheet(worksheet_name)
+        
+        # ดึงข้อมูลดิบ (List of Lists) ซึ่งเร็วกว่า get_all_records
+        data = worksheet.get_all_values()
+        
+        if not data:
+            return pd.DataFrame()
+
+        # แถวแรกเป็น Header
+        headers = data.pop(0)
+        df = pd.DataFrame(data, columns=headers)
+
+        # Clean HN
+        if 'hn' in df.columns:
+            df['hn'] = df['hn'].astype(str).str.split('.').str[0].str.strip().apply(lambda x: x.zfill(7))
+            
+        # Convert Numeric Columns (จำเป็นมากเมื่อใช้ API เพราะข้อมูลมาเป็น String)
+        cols_to_numeric = ['pefr', 'best_pefr', 'height']
+        for col in cols_to_numeric:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                
+        return df
+
+    except gspread.exceptions.WorksheetNotFound:
+        st.error(f"❌ ไม่พบแท็บชื่อ '{worksheet_name}'")
+        st.stop()
+    except Exception as e:
+        st.error(f"❌ โหลดข้อมูลไม่สำเร็จ (Secure Mode): {e}")
         st.stop()
 
 @st.cache_data(ttl=5) 
 def load_data_staff(worksheet_name):
-    sh = connect_to_gsheet()
+    """ฟังก์ชันสำหรับหน้า Staff (Cache สั้นกว่า เพื่อให้เห็นข้อมูล Realtime)"""
+    client = connect_to_gsheet()
     try:
+        sh = client.open_by_key(SHEET_ID)
         worksheet = sh.worksheet(worksheet_name)
         data = worksheet.get_all_records()
         df = pd.DataFrame(data)
@@ -128,25 +154,26 @@ def load_data_staff(worksheet_name):
         st.stop()
 
 def save_visit_data(data_dict):
-    sh = connect_to_gsheet()
+    client = connect_to_gsheet()
+    sh = client.open_by_key(SHEET_ID)
     worksheet = sh.worksheet("visits")
     row_to_append = [
-        str(data_dict["hn"]), # ลบ ' ออกแล้ว (ต้องตั้งค่า Sheet เป็น Plain Text)
+        str(data_dict["hn"]), 
         data_dict["date"], data_dict["pefr"],
         data_dict["control_level"], data_dict["controller"], data_dict["reliever"],
         data_dict["adherence"], data_dict["drp"], data_dict["advice"],
         data_dict["technique_check"], data_dict["next_appt"], 
         data_dict["note"],
-        data_dict["is_new_case"] # เพิ่มคอลัมน์ใหม่
+        data_dict["is_new_case"]
     ]
     worksheet.append_row(row_to_append)
     load_data_staff.clear()
     load_data_fast.clear()
 
 def save_patient_data(data_dict):
-    sh = connect_to_gsheet()
+    client = connect_to_gsheet()
+    sh = client.open_by_key(SHEET_ID)
     worksheet = sh.worksheet("patients")
-    # ลบ ' ออกเพื่อให้ HN ลงเป็นตัวเลข (ต้องตั้งค่า Sheet เป็น Plain Text)
     hn_val = str(data_dict['hn']) 
     row_to_append = [
         hn_val,
@@ -201,13 +228,13 @@ def check_technique_status(pt_visits_df):
 def plot_pefr_chart(visits_df, reference_pefr):
     data = visits_df.copy()
     data = data[data['pefr'] > 0]
-     
+      
     if data.empty:
         return alt.Chart(pd.DataFrame({'date':[], 'pefr':[]})).mark_text(text="ไม่มีข้อมูลกราฟ PEFR")
 
     data['date'] = pd.to_datetime(data['date'])
     ref_val = reference_pefr if reference_pefr > 0 else data['pefr'].max()
-     
+      
     def get_color(val):
         if val >= ref_val * 0.8: return 'green'
         elif val >= ref_val * 0.5: return 'orange'
@@ -232,68 +259,36 @@ def render_dashboard(visits_df):
 
     # เตรียมข้อมูลเบื้องต้น
     df = visits_df.copy()
-    # แปลงคอลัมน์ date เป็น datetime object เพื่อให้คำนวณง่าย
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
     df['month_year'] = df['date'].dt.strftime('%Y-%m') 
 
-    # ==========================================
-    # 🆕 ส่วนที่เพิ่มใหม่: Summary of Today
-    # ==========================================
-    # หาวันที่ปัจจุบัน (รูปแบบ YYYY-MM-DD ให้ตรงกับใน Sheet)
+    # Summary of Today
     today_str = datetime.now().strftime('%Y-%m-%d')
     today_display = datetime.now().strftime('%d/%m/%Y')
     
-    # กรองข้อมูลเฉพาะวันนี้
     today_df = df[df['date'].dt.strftime('%Y-%m-%d') == today_str]
-    
-    # คำนวณยอด
     count_today_total = len(today_df)
     
-    # คำนวณยอด New Case วันนี้ (ป้องกัน Error กรณีไม่มี column)
     if 'is_new_case' in df.columns:
         today_new_cases = today_df[today_df['is_new_case'].astype(str).str.upper() == 'TRUE']
         count_today_new = len(today_new_cases)
     else:
         count_today_new = 0
         
-    # ยอดผู้ป่วยสะสมทั้งหมด (นับจาก HN ไม่ซ้ำ)
     total_patients = len(df['hn'].unique())
 
     st.subheader(f"📅 สรุปยอดประจำวัน ({today_display})")
     
-    # แสดงผลเป็น Card ตัวเลข 3 ช่อง
     m1, m2, m3 = st.columns(3)
+    m1.metric("ผู้รับบริการวันนี้", f"{count_today_total} คน", "Visits", delta_color="off")
+    m2.metric("ผู้ป่วยใหม่วันนี้ (New Case)", f"{count_today_new} คน", f"+{count_today_new}" if count_today_new > 0 else "0")
+    m3.metric("ทะเบียนผู้ป่วยสะสม", f"{total_patients} คน", help="นับจำนวน HN ที่ไม่ซ้ำกันทั้งหมด")
     
-    m1.metric(
-        label="ผู้รับบริการวันนี้", 
-        value=f"{count_today_total} คน",
-        delta="Visits",
-        delta_color="off"
-    )
-    
-    m2.metric(
-        label="ผู้ป่วยใหม่วันนี้ (New Case)", 
-        value=f"{count_today_new} คน",
-        delta=f"+{count_today_new}" if count_today_new > 0 else "0",
-        delta_color="normal" # สีเขียวถ้ามีคนไข้ใหม่
-    )
-    
-    m3.metric(
-        label="ทะเบียนผู้ป่วยสะสม", 
-        value=f"{total_patients} คน",
-        help="นับจำนวน HN ที่ไม่ซ้ำกันทั้งหมดในระบบ"
-    )
-    
-    st.divider() # ขีดเส้นคั่นก่อนเริ่มกราฟเดิม
+    st.divider()
 
-    # ==========================================
-    # กราฟเดิม (KPI 1-4)
-    # ==========================================
-    
-    # KPI 1: สัดส่วนการคุมอาการ
+    # KPI 1
     st.subheader("1. ภาพรวมการควบคุมโรค (Latest Status)")
     latest_visits = df.sort_values('date').groupby('hn').tail(1)
-    
     control_counts = latest_visits['control_level'].value_counts().reset_index()
     control_counts.columns = ['status', 'count']
     
@@ -313,7 +308,7 @@ def render_dashboard(visits_df):
     )
     st.altair_chart(pie + text, use_container_width=True)
 
-    # KPI 2: สถิติรายเดือน
+    # KPI 2
     st.subheader("2. ปริมาณงานรายเดือน (Workload)")
     monthly_visits = df.groupby('month_year').size().reset_index(name='total_visits')
     
@@ -358,6 +353,7 @@ def render_dashboard(visits_df):
             st.dataframe(high_risk, hide_index=True, use_container_width=True)
         else:
             st.success("ไม่มีผู้ป่วย Uncontrolled ในขณะนี้")
+
 # ==========================================
 # 4. MAIN APP LOGIC
 # ==========================================
@@ -368,17 +364,18 @@ if target_hn:
     # ------------------------------------------------
     # 🟢 PATIENT VIEW (Fast Mode) - NO LOGIN REQUIRED
     # ------------------------------------------------
-     
-    patients_db_fast = load_data_fast(PATIENTS_GID)
-    visits_db_fast = load_data_fast(VISITS_GID)
+    
+    # ✅ เรียกข้อมูลผ่าน API ที่ปลอดภัยแล้ว (ใช้ชื่อ Tab แทน GID)
+    patients_db_fast = load_data_fast(PATIENTS_SHEET_NAME)
+    visits_db_fast = load_data_fast(VISITS_SHEET_NAME)
 
     target_hn = str(target_hn).strip().zfill(7)
     patient = patients_db_fast[patients_db_fast['hn'] == target_hn]
-     
+      
     if not patient.empty:
         pt_data = patient.iloc[0]
         masked_name = f"{pt_data['prefix']}{mask_text(pt_data['first_name'])} {mask_text(pt_data['last_name'])}"
-         
+          
         dob = pd.to_datetime(pt_data['dob'])
         age = (datetime.now() - dob).days // 365
         height = pt_data.get('height', 0)
@@ -394,34 +391,42 @@ if target_hn:
         st.divider()
 
         pt_visits = visits_db_fast[visits_db_fast['hn'] == target_hn].copy()
-         
+          
         tech_status, tech_days, tech_last_date = check_technique_status(pt_visits)
         if tech_status == "overdue": st.error(f"⚠️ เตือน: ขาดทบทวนพ่นยา {tech_days} วัน")
         elif tech_status == "ok": st.success(f"✅ เทคนิคพ่นยา: ปกติ (เหลือ {tech_days} วัน)")
 
         if not pt_visits.empty:
-            last_visit = pt_visits.iloc[-1]
+            # ใช้ iloc[-1] เพื่อเอาตัวสุดท้าย (ซึ่งควรเป็นล่าสุด ถ้าข้อมูลเรียงตามเวลาการบันทึก)
+            # แต่เพื่อความชัวร์ใน Dataframe ที่โหลดมาใหม่ เราอาจจะ sort date ก่อน
+            pt_visits['date'] = pd.to_datetime(pt_visits['date'], errors='coerce')
+            pt_visits_sorted = pt_visits.sort_values(by="date")
+            last_visit = pt_visits_sorted.iloc[-1]
+            
             zone_name, zone_color, advice = get_action_plan_zone(last_visit['pefr'], ref_pefr)
             pct_std = get_percent_predicted(last_visit['pefr'], predicted_pefr)
 
-            st.info(f"📋 **สถานะล่าสุด ({last_visit['date']})**")
+            st.info(f"📋 **สถานะล่าสุด ({last_visit['date'].strftime('%d/%m/%Y')})**")
             m1, m2, m3 = st.columns(3)
             pefr_show = last_visit['pefr'] if last_visit['pefr'] > 0 else "N/A"
             m1.metric("PEFR", f"{pefr_show}")
             m2.metric("% มาตรฐาน", f"{pct_std}%", help=f"เทียบค่ามาตรฐาน: {int(predicted_pefr)}")
             m3.markdown(f"โซน: :{zone_color}[**{zone_name}**]")
             st.write(f"**💊 Controller:** {last_visit.get('controller', '-')}")
-             
+              
             if 'note' in last_visit and str(last_visit['note']).strip() != "" and str(last_visit['note']).lower() != "nan":
                 st.info(f"ℹ️ **หมายเหตุ:** {last_visit['note']}")
 
             st.subheader("📈 กราฟแนวโน้ม")
-            chart = plot_pefr_chart(pt_visits, ref_pefr)
+            chart = plot_pefr_chart(pt_visits_sorted, ref_pefr)
             st.altair_chart(chart, use_container_width=True)
             st.caption(f"เส้นประ (ค่าเป้าหมาย): {int(ref_pefr)}")
-             
+              
             with st.expander("ดูประวัติ"):
-                st.dataframe(pt_visits.sort_values(by="date", ascending=False), hide_index=True)
+                # แปลงวันที่กลับเป็น string สวยๆ ก่อนแสดงในตาราง
+                show_df = pt_visits_sorted.sort_values(by="date", ascending=False).copy()
+                show_df['date'] = show_df['date'].dt.strftime('%d/%m/%Y')
+                st.dataframe(show_df, hide_index=True)
         else:
             st.warning("ไม่มีประวัติ")
     else:
@@ -527,7 +532,7 @@ else:
                 except Exception as e:
                     st.error(f"เกิดข้อผิดพลาด: {e}")
 
-# ==========================================
+    # ==========================================
     # 🔍 MODE 3: SEARCH & VISIT RECORD
     # ==========================================
     else:
@@ -544,7 +549,6 @@ else:
             height = pt_data.get('height', 0)
             predicted_pefr = calculate_predicted_pefr(age, height, pt_data['prefix'])
             
-            # คำนวณค่าอ้างอิงสำหรับคำนวณ % (ใช้ Predicted หรือ Personal Best)
             ref_pefr = predicted_pefr if predicted_pefr > 0 else pt_data['best_pefr']
             
             st.title(f"{pt_data['prefix']}{pt_data['first_name']} {pt_data['last_name']}")
@@ -556,26 +560,23 @@ else:
             c3.metric("ส่วนสูง", f"{height} cm")
             c4.metric("Standard PEFR", f"{int(predicted_pefr)}")
 
-            # --- 🆕 ส่วนที่เพิ่ม: แสดงสถานะล่าสุด (เหมือน Patient View) ---
             if not pt_visits.empty:
-                # เรียงวันที่เพื่อให้ได้ visit ล่าสุดจริงๆ
+                # เรียงวันที่เพื่อให้ได้ visit ล่าสุด
+                pt_visits['date'] = pd.to_datetime(pt_visits['date'], errors='coerce')
                 pt_visits_sorted = pt_visits.sort_values(by="date")
                 last_visit = pt_visits_sorted.iloc[-1]
                 
-                # คำนวณโซนและ %
                 current_pefr = last_visit['pefr']
                 zone_name, zone_color, advice = get_action_plan_zone(current_pefr, ref_pefr)
                 pct_std = get_percent_predicted(current_pefr, ref_pefr)
                 
-                # แสดงผล
                 st.markdown("---")
-                st.info(f"📋 **สถานะล่าสุด ({last_visit['date']})**")
+                st.info(f"📋 **สถานะล่าสุด ({last_visit['date'].strftime('%d/%m/%Y')})**")
                 
                 s1, s2, s3, s4 = st.columns(4)
                 
                 pefr_show = current_pefr if current_pefr > 0 else "N/A"
                 s1.metric("PEFR ล่าสุด", f"{pefr_show}")
-                
                 s2.metric("% มาตรฐาน", f"{pct_std}%", help=f"เทียบค่ามาตรฐาน: {int(ref_pefr)}")
                 
                 with s3:
@@ -593,27 +594,38 @@ else:
             # --- Alerts ---
             st.divider()
             
-            # Alert Tech
             tech_status, tech_days, tech_last_date = check_technique_status(pt_visits)
             if tech_status == "overdue": st.error(f"🚨 ขาดทบทวนพ่นยา {tech_days} วัน!")
             elif tech_status == "never": st.error(f"🚨 ยังไม่เคยสอนพ่นยา!")
             else: st.success(f"✅ สอนพ่นยาแล้ว (เหลือ {tech_days} วัน)")
             
-            # Alert DRP
             if not pt_visits.empty:
-                last_visit_row = pt_visits.sort_values(by="date").iloc[-1] # ใช้ตัวแปร Local
+                last_visit_row = pt_visits_sorted.iloc[-1]
                 last_drp_text = str(last_visit_row['drp']).strip()
                 if last_drp_text != "" and last_drp_text != "-" and last_drp_text.lower() != "nan":
-                    d_date = pd.to_datetime(last_visit_row['date']).strftime('%d/%m/%Y')
+                    d_date = last_visit_row['date'].strftime('%d/%m/%Y')
                     st.warning(f"💊 **DRP ล่าสุด ({d_date}):** {last_drp_text}")
 
             st.subheader("📈 กราฟติดตามอาการ")
             if not pt_visits.empty:
-                chart = plot_pefr_chart(pt_visits, ref_pefr)
+                chart = plot_pefr_chart(pt_visits_sorted, ref_pefr)
                 st.altair_chart(chart, use_container_width=True)
 
             with st.expander("ประวัติการรักษา"):
-                st.dataframe(pt_visits.sort_values(by="date", ascending=False), use_container_width=True)
+                if not pt_visits.empty:
+                    # ✅ FIX: สร้างตัวแปรใหม่สำหรับแสดงผลโดยเฉพาะ ไม่พึ่งพาตัวแปรจาก if ด้านบน
+                    # เพื่อป้องกัน NameError ในกรณีคนไข้ใหม่
+                    history_df = pt_visits.copy()
+                    history_df['date'] = pd.to_datetime(history_df['date'], errors='coerce')
+                    history_df = history_df.sort_values(by="date", ascending=False)
+                    
+                    # จัด format วันที่ให้สวยงามก่อนแสดง
+                    history_df['date'] = history_df['date'].dt.strftime('%d/%m/%Y')
+                    
+                    st.dataframe(history_df, use_container_width=True)
+                else:
+                    # ✅ แจ้งเตือนกรณีเป็นคนไข้ใหม่
+                    st.info("ℹ️ ยังไม่มีประวัติการรักษา (New Case)")
                 
             st.divider()
             st.subheader("📝 บันทึก Visit")
