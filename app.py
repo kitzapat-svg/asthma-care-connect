@@ -22,9 +22,29 @@ SHEET_NAME = "asthma_db"
 PATIENTS_GID = "0"
 VISITS_GID = "1491996218"
 
-# 🔐 ดึงรหัสผ่านเจ้าหน้าที่จาก Secrets (ถ้าไม่มีให้ใช้ 1234 เป็นค่าเริ่มต้น)
-# ควรตั้งค่าใน .streamlit/secrets.toml หรือ Cloud Settings
-ADMIN_PASSWORD = st.secrets.get("admin_password", "1234")
+# --- 🛡️ SYSTEM CONFIGURATION (Auto-Fallback) ---
+# ส่วนนี้จะดักจับ Error กรณีไม่มีไฟล์ secrets.toml ในเครื่อง (Localhost)
+# เพื่อให้โปรแกรมยังทำงานต่อได้โดยใช้ค่า Default
+
+# 1. ตั้งค่ารหัสผ่าน (Password)
+try:
+    if "admin_password" in st.secrets:
+        ADMIN_PASSWORD = st.secrets["admin_password"]
+    else:
+        ADMIN_PASSWORD = "1234"
+except Exception:
+    # กรณีหาไฟล์ secrets ไม่เจอเลย
+    ADMIN_PASSWORD = "1234"
+
+# 2. ตั้งค่า URL (Base URL)
+try:
+    if "deploy_url" in st.secrets:
+        BASE_URL = st.secrets["deploy_url"]
+        if BASE_URL.endswith("/"): BASE_URL = BASE_URL[:-1]
+    else:
+        BASE_URL = "http://localhost:8501"
+except Exception:
+    BASE_URL = "http://localhost:8501"
 
 # ==========================================
 # 2. CALCULATION FORMULAS
@@ -72,18 +92,25 @@ def load_data_fast(gid):
 
 def connect_to_gsheet():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    
+    # ☁️ Priority 1: ลองดึงจาก Secrets (สำหรับ Cloud)
     try:
         if "gcp_service_account" in st.secrets:
             creds_dict = st.secrets["gcp_service_account"]
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        else:
-            creds = ServiceAccountCredentials.from_json_keyfile_name('service_account.json', scope)
-            
+            client = gspread.authorize(creds)
+            return client.open_by_key(SHEET_ID)
+    except Exception:
+        pass # ถ้าดึงจาก Secrets ไม่ได้ หรือไม่มีไฟล์ Secrets ให้ข้ามไป Priority 2
+
+    # 💻 Priority 2: ลองดึงจากไฟล์ JSON ในเครื่อง (สำหรับ Localhost)
+    try:
+        creds = ServiceAccountCredentials.from_json_keyfile_name('service_account.json', scope)
         client = gspread.authorize(creds)
         return client.open_by_key(SHEET_ID)
-        
     except Exception as e:
-        st.error(f"❌ เชื่อมต่อ Google Sheets ไม่สำเร็จ: {e}")
+        st.error("❌ ไม่สามารถเชื่อมต่อ Google Sheets ได้")
+        st.error("กรุณาตรวจสอบว่ามีไฟล์ 'service_account.json' ในโฟลเดอร์ หรือตั้งค่า Secrets บน Cloud แล้ว")
         st.stop()
 
 @st.cache_data(ttl=5) 
@@ -203,23 +230,75 @@ def render_dashboard(visits_df):
         st.warning("ยังไม่มีข้อมูลการตรวจเยี่ยม")
         return
 
-    # เตรียมข้อมูล
+    # เตรียมข้อมูลเบื้องต้น
     df = visits_df.copy()
+    # แปลงคอลัมน์ date เป็น datetime object เพื่อให้คำนวณง่าย
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    df['month_year'] = df['date'].dt.strftime('%Y-%m') # จัดกลุ่มรายเดือน
+    df['month_year'] = df['date'].dt.strftime('%Y-%m') 
+
+    # ==========================================
+    # 🆕 ส่วนที่เพิ่มใหม่: Summary of Today
+    # ==========================================
+    # หาวันที่ปัจจุบัน (รูปแบบ YYYY-MM-DD ให้ตรงกับใน Sheet)
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    today_display = datetime.now().strftime('%d/%m/%Y')
     
-    # ----------------------------------
-    # KPI 1: สัดส่วนการคุมอาการ (Control Level) - นับเฉพาะ Visit ล่าสุดของแต่ละคน
-    # ----------------------------------
+    # กรองข้อมูลเฉพาะวันนี้
+    today_df = df[df['date'].dt.strftime('%Y-%m-%d') == today_str]
+    
+    # คำนวณยอด
+    count_today_total = len(today_df)
+    
+    # คำนวณยอด New Case วันนี้ (ป้องกัน Error กรณีไม่มี column)
+    if 'is_new_case' in df.columns:
+        today_new_cases = today_df[today_df['is_new_case'].astype(str).str.upper() == 'TRUE']
+        count_today_new = len(today_new_cases)
+    else:
+        count_today_new = 0
+        
+    # ยอดผู้ป่วยสะสมทั้งหมด (นับจาก HN ไม่ซ้ำ)
+    total_patients = len(df['hn'].unique())
+
+    st.subheader(f"📅 สรุปยอดประจำวัน ({today_display})")
+    
+    # แสดงผลเป็น Card ตัวเลข 3 ช่อง
+    m1, m2, m3 = st.columns(3)
+    
+    m1.metric(
+        label="ผู้รับบริการวันนี้", 
+        value=f"{count_today_total} คน",
+        delta="Visits",
+        delta_color="off"
+    )
+    
+    m2.metric(
+        label="ผู้ป่วยใหม่วันนี้ (New Case)", 
+        value=f"{count_today_new} คน",
+        delta=f"+{count_today_new}" if count_today_new > 0 else "0",
+        delta_color="normal" # สีเขียวถ้ามีคนไข้ใหม่
+    )
+    
+    m3.metric(
+        label="ทะเบียนผู้ป่วยสะสม", 
+        value=f"{total_patients} คน",
+        help="นับจำนวน HN ที่ไม่ซ้ำกันทั้งหมดในระบบ"
+    )
+    
+    st.divider() # ขีดเส้นคั่นก่อนเริ่มกราฟเดิม
+
+    # ==========================================
+    # กราฟเดิม (KPI 1-4)
+    # ==========================================
+    
+    # KPI 1: สัดส่วนการคุมอาการ
     st.subheader("1. ภาพรวมการควบคุมโรค (Latest Status)")
     latest_visits = df.sort_values('date').groupby('hn').tail(1)
     
     control_counts = latest_visits['control_level'].value_counts().reset_index()
     control_counts.columns = ['status', 'count']
     
-    # กำหนดสี
     domain = ['Controlled', 'Partly Controlled', 'Uncontrolled']
-    range_ = ['#66BB6A', '#FFCA28', '#EF5350'] # Green, Amber, Red
+    range_ = ['#66BB6A', '#FFCA28', '#EF5350'] 
 
     pie = alt.Chart(control_counts).mark_arc(innerRadius=50).encode(
         theta=alt.Theta(field="count", type="quantitative"),
@@ -232,25 +311,18 @@ def render_dashboard(visits_df):
         order=alt.Order("status"),
         color=alt.value("black")  
     )
-    
     st.altair_chart(pie + text, use_container_width=True)
 
-    # ----------------------------------
-    # KPI 2: สถิติผู้รับบริการรายเดือน (Total Visits & New Cases)
-    # ----------------------------------
+    # KPI 2: สถิติรายเดือน
     st.subheader("2. ปริมาณงานรายเดือน (Workload)")
-    
-    # นับจำนวน Visit ทั้งหมด
     monthly_visits = df.groupby('month_year').size().reset_index(name='total_visits')
     
-    # นับจำนวน New Cases
     if 'is_new_case' in df.columns:
         new_cases = df[df['is_new_case'].astype(str).str.upper() == 'TRUE']
         monthly_new = new_cases.groupby('month_year').size().reset_index(name='new_cases')
     else:
         monthly_new = pd.DataFrame(columns=['month_year', 'new_cases'])
 
-    # รวมตาราง
     trend_df = pd.merge(monthly_visits, monthly_new, on='month_year', how='left').fillna(0)
     trend_long = trend_df.melt('month_year', var_name='type', value_name='count')
     
@@ -260,12 +332,9 @@ def render_dashboard(visits_df):
         color=alt.Color('type', legend=alt.Legend(title="ประเภท"), scale=alt.Scale(domain=['total_visits', 'new_cases'], range=['#42A5F5', '#AB47BC'])),
         tooltip=['month_year', 'type', 'count']
     ).properties(height=300)
-    
     st.altair_chart(line_chart, use_container_width=True)
 
-    # ----------------------------------
-    # KPI 3: ยา Controller
-    # ----------------------------------
+    # KPI 3 & 4
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("3. การใช้ยา Controller")
@@ -282,9 +351,6 @@ def render_dashboard(visits_df):
         )
         st.altair_chart(bar_med, use_container_width=True)
     
-    # ----------------------------------
-    # KPI 4: Action List
-    # ----------------------------------
     with c2:
         st.subheader("🚨 กลุ่มเสี่ยง (Uncontrolled)")
         high_risk = latest_visits[latest_visits['control_level'] == 'Uncontrolled'][['hn', 'date', 'pefr', 'note']]
@@ -292,7 +358,6 @@ def render_dashboard(visits_df):
             st.dataframe(high_risk, hide_index=True, use_container_width=True)
         else:
             st.success("ไม่มีผู้ป่วย Uncontrolled ในขณะนี้")
-
 # ==========================================
 # 4. MAIN APP LOGIC
 # ==========================================
@@ -535,7 +600,7 @@ else:
                 
                 c_adh, c_chk = st.columns(2)
                 with c_adh:
-                    v_adh = st.slider("ความร่วมมือ (%)", 0, 100, 90)
+                    v_adh = st.slider("ความร่วมมือ (%)", 0, 100, 100)
                     v_relative_pickup = st.checkbox("ญาติรับยาแทน / ประเมินไม่ได้", help="หากเลือก ความร่วมมือจะเป็น 0 และจะระบุในหมายเหตุ")
                 with c_chk:
                     st.write("") 
@@ -582,13 +647,8 @@ else:
             st.divider()
             st.subheader("📇 Asthma Card")
             
-            # URL Management from Secrets
-            if "deploy_url" in st.secrets:
-                base_url = st.secrets["deploy_url"]
-            else:
-                base_url = "http://localhost:8501"
-
-            link = f"{base_url}/?hn={selected_hn}"
+            # ใช้ BASE_URL ที่เราตั้งค่าไว้ตอนต้น (Safe URL)
+            link = f"{BASE_URL}/?hn={selected_hn}"
             
             c_q, c_t = st.columns([1,2])
             c_q.image(generate_qr(link), width=150)
