@@ -597,27 +597,6 @@ else:
             st.divider()
             st.subheader("📇 Asthma Card")
             
-            # URL Management from Secrets
-            if "deploy_url" in st.secrets:
-                base_url = st.secrets["deploy_url"]
-            else:
-                base_url = "http://localhost:8501"
-
-            link = f"{base_url}/?hn={selected_hn}"
-            
-            c_q, c_t = st.columns([1,2])
-            c_q.image(generate_qr(link), width=150)
-            
-            with c_t:
-                st.markdown(f"**{pt_data['first_name']} {pt_data['last_name']}**")
-                st.markdown(f"**HN:** `{selected_hn}`")
-                st.markdown(f"Predicted PEFR: {int(predicted_pefr)}")
-                st.link_button("🔗 เปิดลิงก์คนไข้", link, type="primary")
-            
-            st.caption(f"Direct Link: {link}")
-            
-            st.divider()
-            st.subheader("📇 Asthma Card")
             # ---------------------------------------------------------
             # 🌐 URL CONFIGURATION
             # ---------------------------------------------------------
@@ -646,4 +625,3 @@ else:
             
             # แสดง URL ด้านล่างเพื่อตรวจสอบความถูกต้อง
             st.caption(f"Direct Link: {link}")
-
