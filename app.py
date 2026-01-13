@@ -14,32 +14,31 @@ import numpy as np
 # ==========================================
 st.set_page_config(page_title="Asthma Care Connect", layout="centered", page_icon="🫁")
 
-# --- การตั้งค่า Google Sheets ---
+# --- ✅ ส่วนที่หายไป (ต้องเพิ่มกลับมา) ---
+# การตั้งค่า Google Sheets ID
 SHEET_ID = "1LF9Yi6CXHaiITVCqj9jj1agEdEE9S-37FwnaxNIlAaE"
 SHEET_NAME = "asthma_db"
 
-# ✅ UPDATED: ใช้ชื่อ Tab แทน GID เพื่อเรียกผ่าน API
+# ชื่อ Tab สำหรับเรียกใช้งาน
 PATIENTS_SHEET_NAME = "patients"
 VISITS_SHEET_NAME = "visits"
 
-# --- 🛡️ SYSTEM CONFIGURATION (Auto-Fallback) ---
-# 1. ตั้งค่ารหัสผ่าน (Password)
-try:
-    if "admin_password" in st.secrets:
-        ADMIN_PASSWORD = st.secrets["admin_password"]
-    else:
-        ADMIN_PASSWORD = "1234"
-except Exception:
-    ADMIN_PASSWORD = "1234"
+# --- 🛡️ SYSTEM CONFIGURATION (Secure Setup) ---
+# ตรวจสอบว่ามี admin_password ใน secrets หรือไม่
+if "admin_password" not in st.secrets:
+    st.error("❌ Critical Security Error: ไม่พบรหัสผ่านผู้ดูแลระบบ (admin_password)")
+    st.info("💡 วิธีแก้ไข:\n"
+            "1. Local: สร้างไฟล์ `.streamlit/secrets.toml` แล้วใส่ `admin_password = 'your_password'`\n"
+            "2. Cloud: ไปที่ App Settings > Secrets แล้วเพิ่มค่าเดียวกัน")
+    st.stop()  # ⛔ หยุดการทำงานทันที ถ้าไม่มีรหัสผ่าน
 
-# 2. ตั้งค่า URL (Base URL)
-try:
-    if "deploy_url" in st.secrets:
-        BASE_URL = st.secrets["deploy_url"]
-        if BASE_URL.endswith("/"): BASE_URL = BASE_URL[:-1]
-    else:
-        BASE_URL = "http://localhost:8501"
-except Exception:
+ADMIN_PASSWORD = st.secrets["admin_password"]
+
+# ตั้งค่า URL (Base URL)
+if "deploy_url" in st.secrets:
+    BASE_URL = st.secrets["deploy_url"]
+    if BASE_URL.endswith("/"): BASE_URL = BASE_URL[:-1]
+else:
     BASE_URL = "http://localhost:8501"
 
 # ==========================================
