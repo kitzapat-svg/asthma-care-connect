@@ -8,6 +8,42 @@ SHEET_ID = "1LF9Yi6CXHaiITVCqj9jj1agEdEE9S-37FwnaxNIlAaE"
 PATIENTS_SHEET_NAME = "patients"
 VISITS_SHEET_NAME = "visits"
 
+# ✅ 1. แก้ไขฟังก์ชันบันทึกคนไข้ใหม่ (ให้เพิ่มสถานะ Active เป็นค่าเริ่มต้น)
+def save_patient_data(data_dict):
+    client = connect_to_gsheet()
+    sh = client.open_by_key(SHEET_ID)
+    worksheet = sh.worksheet("patients")
+    row = [
+        str(data_dict['hn']), data_dict["prefix"], data_dict["first_name"],
+        data_dict["last_name"], data_dict["dob"], data_dict["best_pefr"], 
+        data_dict["height"], "Active"  # <--- เพิ่ม Active เป็นค่า Default คอลัมน์ที่ 8
+    ]
+    worksheet.append_row(row)
+    load_data_staff.clear()
+    load_data_fast.clear()
+
+# ✅ 2. เพิ่มฟังก์ชันอัปเดตสถานะ (ใส่เพิ่มต่อท้ายไฟล์ได้เลย)
+def update_patient_status(hn, new_status):
+    """ค้นหา HN แล้วแก้สถานะในคอลัมน์ H (Index 8)"""
+    client = connect_to_gsheet()
+    sh = client.open_by_key(SHEET_ID)
+    worksheet = sh.worksheet("patients")
+    
+    try:
+        # ค้นหา Cell ที่มี HN ตรงกัน
+        cell = worksheet.find(str(hn))
+        if cell:
+            # อัปเดตสถานะที่คอลัมน์ 8 (H) ของแถวนั้น
+            worksheet.update_cell(cell.row, 8, new_status)
+            load_data_staff.clear() # ล้าง Cache ให้เห็นค่าใหม่ทันที
+            load_data_fast.clear()
+            return True
+        else:
+            return False
+    except Exception as e:
+        st.error(f"Update Status Error: {e}")
+        return False
+
 def connect_to_gsheet():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     try:
@@ -91,4 +127,5 @@ def save_patient_data(data_dict):
     ]
     worksheet.append_row(row)
     load_data_staff.clear()
+
     load_data_fast.clear()
