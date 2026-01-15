@@ -53,8 +53,9 @@ else:
     mode = st.sidebar.radio("เมนูหลัก", ["🔍 ค้นหา/บันทึกอาการ", "➕ ลงทะเบียนผู้ป่วยใหม่", "📊 Dashboard ภาพรวม"])
 
     if mode == "📊 Dashboard ภาพรวม":
-        render_dashboard(visits_db)
+        render_dashboard(visits_db, patients_db)
     elif mode == "➕ ลงทะเบียนผู้ป่วยใหม่":
         render_register_patient(patients_db)
     else:
+
         render_search_patient(patients_db, visits_db, BASE_URL)
