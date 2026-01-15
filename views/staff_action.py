@@ -198,8 +198,38 @@ def render_search_patient(patients_db, visits_db, base_url):
                 st.success("บันทึกสำเร็จ")
                 st.rerun()
 
+        # ========================================================
+        # 📇 DIGITAL ASTHMA CARD (ปรับปรุงใหม่ สวยงามแบบ Card)
+        # ========================================================
         st.divider()
+        st.subheader("📇 Digital Asthma Card")
+
+        # สร้าง Link
         link = f"{base_url}/?hn={selected_hn}"
-        c_q, c_t = st.columns([1,2])
-        c_q.image(generate_qr(link), width=150)
-        c_t.markdown(f"**ลิงก์คนไข้:** {link}")
+        
+        # ใช้ Container แบบมีขอบ (border=True) เพื่อให้ดูเหมือนบัตร
+        with st.container(border=True):
+            c_qr, c_info = st.columns([1, 2.5]) # แบ่งสัดส่วน ซ้าย(QR) : ขวา(ข้อมูล)
+            
+            with c_qr:
+                # แสดง QR Code เต็มความกว้างคอลัมน์
+                st.image(generate_qr(link), use_container_width=True)
+                st.caption("📱 สแกนเพื่อดูประวัติ")
+            
+            with c_info:
+                # ส่วนข้อมูลคนไข้ จัด Typography ให้สวยงาม
+                st.markdown(f"### {pt_data['prefix']}{pt_data['first_name']} {pt_data['last_name']}")
+                st.markdown(f"**HN:** `{selected_hn}`")
+                
+                # แสดงข้อมูลสำคัญแนวนอน
+                c_age, c_height = st.columns(2)
+                c_age.markdown(f"**อายุ:** {age} ปี")
+                c_height.markdown(f"**ส่วนสูง:** {height} cm")
+                
+                # เน้นค่าเป้าหมาย (Standard PEFR) ใส่ในกรอบสีฟ้า
+                st.info(f"🎯 **Predicted PEFR:** {int(predicted_pefr)} L/min")
+                
+                # ปุ่มเปิดลิงก์สีแดง (type='primary') แบบเต็มความกว้าง
+                st.link_button("🔗 เปิดหน้าคนไข้ (Patient View)", link, type="primary", use_container_width=True)
+        
+        # เพิ่มส่วน Copy Link เผื่อกรณี QR ใช้ไม่ได้
