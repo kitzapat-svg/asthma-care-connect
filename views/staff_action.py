@@ -7,39 +7,9 @@ from utils.calculations import (
     check_technique_status, plot_pefr_chart, generate_qr
 )
 
-def render_register_patient(patients_db):
-    st.title("➕ ลงทะเบียนผู้ป่วยรายใหม่")
-    with st.form("register_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        reg_hn_input = col1.text_input("HN (เลขประจำตัวผู้ป่วย)")
-        reg_prefix = col2.selectbox("คำนำหน้า", ["นาย", "นาง", "น.ส.", "ด.ช.", "ด.ญ."])
-        col3, col4 = st.columns(2)
-        reg_fname = col3.text_input("ชื่อจริง")
-        reg_lname = col4.text_input("นามสกุล")
-        col5, col6 = st.columns(2)
-        reg_dob = col5.date_input("วันเกิด", min_value=datetime(1920, 1, 1))
-        reg_height = col6.number_input("ส่วนสูง (cm)", 50, 250, 160)
-        reg_best_pefr = st.number_input("Personal Best PEFR (ถ้ามี)", 0, 900, 0)
-        
-        if st.form_submit_button("✅ ลงทะเบียน"):
-            if not reg_hn_input or not reg_fname or not reg_lname:
-                st.error("❌ กรุณากรอกข้อมูลให้ครบถ้วน")
-                return
-            formatted_hn = str(reg_hn_input).strip().zfill(7)
-            if formatted_hn in patients_db['hn'].values:
-                st.error(f"❌ HN {formatted_hn} มีอยู่ในระบบแล้ว")
-                return
-            
-            new_pt_data = {
-                "hn": formatted_hn, "prefix": reg_prefix, "first_name": reg_fname,
-                "last_name": reg_lname, "dob": str(reg_dob),
-                "best_pefr": reg_best_pefr, "height": reg_height
-            }
-            try:
-                save_patient_data(new_pt_data)
-                st.success(f"🎉 ลงทะเบียนสำเร็จ!")
-            except Exception as e:
-                st.error(f"Error: {e}")
+# ... (Imports เดิม) ...
+# ✅ เพิ่ม import update_patient_status เข้ามา
+from utils.gsheet_handler import save_patient_data, save_visit_data, update_patient_status
 
 def render_search_patient(patients_db, visits_db, base_url):
     hn_list = patients_db['hn'].unique().tolist()
@@ -50,6 +20,44 @@ def render_search_patient(patients_db, visits_db, base_url):
         # เตรียมข้อมูลคนไข้
         pt_data = patients_db[patients_db['hn'] == selected_hn].iloc[0]
         pt_visits = visits_db[visits_db['hn'] == selected_hn]
+        
+        # --- ✅ ส่วนจัดการสถานะ (Patient Status) ---
+        # ดึงสถานะปัจจุบัน (ถ้าไม่มีให้เป็น Active)
+        current_status = pt_data.get('status', 'Active')
+        if pd.isna(current_status) or str(current_status).strip() == "":
+            current_status = "Active"
+
+        # กำหนดสี Badge ตามสถานะ
+        status_color = "green"
+        if current_status == "Discharge": status_color = "grey"
+        elif current_status == "COPD": status_color = "orange"
+
+        # แสดง Header พร้อมสถานะ
+        c_head, c_status = st.columns([3, 1])
+        with c_head:
+            st.title(f"{pt_data['prefix']}{pt_data['first_name']} {pt_data['last_name']}")
+        with c_status:
+            st.write("") # ดันลงมานิดนึง
+            st.markdown(f"สถานะ: :{status_color}[**{current_status}**]")
+
+        # ปุ่มเปลี่ยนสถานะ (ใส่ใน Expander เพื่อไม่ให้เกะกะ)
+        with st.expander("⚙️ แก้ไขสถานะคนไข้ (Discharge / COPD)"):
+            new_status = st.radio(
+                "เลือกสถานะใหม่:", 
+                ["Active", "Discharge", "COPD"],
+                horizontal=True,
+                index=["Active", "Discharge", "COPD"].index(current_status)
+            )
+            
+            if new_status != current_status:
+                if st.button("บันทึกการเปลี่ยนสถานะ"):
+                    with st.spinner("กำลังอัปเดต..."):
+                        success = update_patient_status(selected_hn, new_status)
+                        if success:
+                            st.success(f"เปลี่ยนสถานะเป็น {new_status} เรียบร้อย!")
+                            st.rerun()
+                        else:
+                            st.error("เกิดข้อผิดพลาดในการอัปเดต")
         
         dob = pd.to_datetime(pt_data['dob'])
         age = (datetime.now() - dob).days // 365
@@ -233,3 +241,4 @@ def render_search_patient(patients_db, visits_db, base_url):
                 st.link_button("🔗 เปิดหน้าคนไข้ (Patient View)", link, type="primary", use_container_width=True)
         
         # เพิ่มส่วน Copy Link เผื่อกรณี QR ใช้ไม่ได้
+
