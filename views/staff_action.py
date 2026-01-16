@@ -183,17 +183,16 @@ def render_search_patient(patients_db, visits_db, base_url):
             v_adh = c_adh.slider("ความร่วมมือ (%)", 0, 100, 100)
             v_relative_pickup = c_adh.checkbox("ญาติรับยาแทน")
             
-            # --- ✅ ส่วนประเมินเทคนิคพ่นยา (Assess Inhaler Technique) ---
+            # --- ✅ TEACH & ASSESS TOGGLE (Integrated) ---
             with c_chk:
-                st.write("") # ดันบรรทัดลงมาให้ตรงกับ Slider
-                # เปลี่ยน Label ให้สื่อความหมายรวม
+                st.write("") # ดันบรรทัดลงมา
+                # ปุ่มเดียว "สอน/ประเมิน"
                 is_teach_and_assess = st.checkbox("✅ สอน/ประเมินเทคนิคพ่นยา")
 
             inhaler_summary_text = "-"
             
-            # ถ้าติ๊ก "สอน/ประเมิน" ให้กาง Checklist ออกมาทันที
+            # ถ้าติ๊ก -> กาง Checklist ทันที
             if is_teach_and_assess:
-                # ใช้ Container แบบมีขอบเพื่อให้ดูเป็นสัดส่วนชัดเจน
                 with st.container(border=True):
                     st.info("📝 **แบบประเมินเทคนิค MDI (Inhaler Device Technique)**")
                     
@@ -208,16 +207,13 @@ def render_search_patient(patients_db, visits_db, base_url):
                         "(8) ผ่อนลมหายใจออกทางปากหรือจมูกช้าๆ"
                     ]
                     
-                    # วนลูปสร้าง Checkbox
                     checks = []
                     for step in steps:
-                        # Default = True (สมมติว่าสอนแล้วทำได้ ถ้าทำไม่ได้ให้ติ๊กออก)
                         checks.append(st.checkbox(step, value=True))
 
-                    # คำนวณคะแนน
                     score = sum(checks)
                     
-                    # เช็คจุดวิกฤต (ข้อ 5, 6, 7)
+                    # Critical Fail Logic
                     critical_fail = []
                     if not checks[4]: critical_fail.append("ข้อ 5 (อมไม่สนิท)")
                     if not checks[5]: critical_fail.append("ข้อ 6 (กดพร้อมสูด)")
@@ -241,13 +237,12 @@ def render_search_patient(patients_db, visits_db, base_url):
                     adv_rinse = c_adv1.checkbox("แนะนำบ้วนปากหลังพ่น")
                     adv_clean = c_adv2.checkbox("แนะนำล้างทำความสะอาด")
                     
-                    # เตรียมข้อความสำหรับบันทึก
+                    # Summary String
                     failed_indices = [i+1 for i, x in enumerate(checks) if not x]
                     fail_str = ",".join(map(str, failed_indices)) if failed_indices else "None"
                     inhaler_summary_text = f"Score: {score}/8 ({inhaler_status}) | Fail: {fail_str}"
                     if adv_rinse: inhaler_summary_text += " | Adv:Rinse"
                     if adv_clean: inhaler_summary_text += " | Adv:Clean"
-
             # -------------------------------------------------------------
             
             v_drp = st.text_area("DRP")
@@ -260,9 +255,8 @@ def render_search_patient(patients_db, visits_db, base_url):
                 actual_adherence = 0 if v_relative_pickup else v_adh
                 final_note = f"[ญาติรับแทน] {v_note}" if v_relative_pickup else v_note
                 
-                # Logic การบันทึกเทคนิคพ่นยา
-                # ถ้ามีการประเมิน (do_assess) ถือว่าได้ทบทวนแล้ว ให้ technique_check = "ทำ"
-                final_tech_check = "ทำ" if do_assess else "ไม่"
+                # Logic: ถ้าติ๊ก "สอน/ประเมิน" -> technique_check = "ทำ"
+                final_tech_check = "ทำ" if is_teach_and_assess else "ไม่"
 
                 new_data = {
                     "hn": selected_hn, "date": str(v_date), "pefr": actual_pefr,
@@ -274,7 +268,7 @@ def render_search_patient(patients_db, visits_db, base_url):
                     "technique_check": final_tech_check,
                     "next_appt": str(v_next), "note": final_note, 
                     "is_new_case": "TRUE" if v_is_new else "FALSE",
-                    "inhaler_eval": inhaler_summary_text # ส่งผลประเมินไปบันทึก
+                    "inhaler_eval": inhaler_summary_text
                 }
                 save_visit_data(new_data)
                 st.success("บันทึกสำเร็จ")
@@ -300,4 +294,3 @@ def render_search_patient(patients_db, visits_db, base_url):
         
         with st.expander("🔗 คัดลอกลิงก์โดยตรง"):
             st.text_input("Direct Link", value=link, label_visibility="collapsed")
-
