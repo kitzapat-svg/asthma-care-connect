@@ -1,10 +1,9 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-import uuid # ต้องใช้สำหรับสร้าง Token
 
 # Import Utils
-from utils.gsheet_handler import save_patient_data, save_visit_data, update_patient_status, update_patient_token
+from utils.gsheet_handler import save_patient_data, save_visit_data, update_patient_status
 from utils.calculations import (
     calculate_predicted_pefr, get_action_plan_zone, get_percent_predicted,
     check_technique_status, plot_pefr_chart, generate_qr
@@ -54,18 +53,7 @@ def render_search_patient(patients_db, visits_db, base_url):
         pt_data = patients_db[patients_db['hn'] == selected_hn].iloc[0]
         pt_visits = visits_db[visits_db['hn'] == selected_hn]
         
-        # --- จัดการ Token ความปลอดภัย ---
-        current_token = str(pt_data.get('access_token', '')).strip()
-        if not current_token or current_token.lower() == 'nan':
-            # ถ้าไม่มี Token ให้สร้างใหม่เงียบๆ แล้วรีโหลด
-            new_token = str(uuid.uuid4())
-            update_patient_token(selected_hn, new_token)
-            st.rerun()
-        
-        secure_link = f"{base_url}/?token={current_token}"
-        # ----------------------------
-
-        # --- ส่วนจัดการสถานะ (Patient Status) ---
+        # --- จัดการสถานะ ---
         current_status = pt_data.get('status', 'Active')
         if pd.isna(current_status) or str(current_status).strip() == "":
             current_status = "Active"
@@ -107,7 +95,7 @@ def render_search_patient(patients_db, visits_db, base_url):
         c3.metric("ส่วนสูง", f"{height} cm")
         c4.metric("Standard PEFR", f"{int(predicted_pefr)}")
 
-        # --- ตัวแปรสำหรับ Smart Form (ดึงจาก visit ล่าสุดจริง แม้ PEFR=0) ---
+        # --- Smart Form Variables ---
         controller_options = ["Seretide", "Budesonide", "Symbicort"]
         reliever_options = ["Salbutamol", "Berodual"]
         default_controllers = []
@@ -116,11 +104,8 @@ def render_search_patient(patients_db, visits_db, base_url):
         if not pt_visits.empty:
             pt_visits['date'] = pd.to_datetime(pt_visits['date'], errors='coerce')
             pt_visits_sorted = pt_visits.sort_values(by="date")
-            
-            # 1. ข้อมูล Visit ล่าสุดจริงๆ (ใช้สำหรับดึงยาเดิม และเช็ค Tech/DRP)
             last_actual_visit = pt_visits_sorted.iloc[-1]
             
-            # ดึงรายการยาเดิม (จากครั้งล่าสุด ไม่สนว่าเป่าหรือไม่)
             def parse_meds(med_str, available_opts):
                 if pd.isna(med_str) or str(med_str).strip() == "": return []
                 items = [x.strip() for x in str(med_str).split(",")]
@@ -129,12 +114,8 @@ def render_search_patient(patients_db, visits_db, base_url):
             default_controllers = parse_meds(last_actual_visit.get('controller'), controller_options)
             default_relievers = parse_meds(last_actual_visit.get('reliever'), reliever_options)
 
-            # -------------------------------------------------------------
-            # ✅ ปรับปรุงส่วนแสดงสถานะ (ใช้ Logic เดียวกับ Patient View)
-            # -------------------------------------------------------------
+            # --- ส่วนแสดงสถานะล่าสุด (Logic กรอง PEFR > 0) ---
             st.markdown("---")
-            
-            # กรองหา Visit ที่มีการเป่าจริง (PEFR > 0)
             valid_pefr_visits = pt_visits_sorted[pt_visits_sorted['pefr'] > 0]
             
             if not valid_pefr_visits.empty:
@@ -142,13 +123,11 @@ def render_search_patient(patients_db, visits_db, base_url):
                 current_pefr = last_valid_visit['pefr']
                 visit_date_str = last_valid_visit['date'].strftime('%d/%m/%Y')
                 
-                # คำนวณ Zone จากค่าที่มีการเป่าจริง
                 zone_name, zone_color, advice = get_action_plan_zone(current_pefr, ref_pefr)
                 pct_std = get_percent_predicted(current_pefr, ref_pefr)
                 
                 st.info(f"📋 **สถานะล่าสุด ({visit_date_str})**")
                 
-                # เช็คว่าวันล่าสุดคือวันเดียวกับที่มีการเป่าจริงหรือไม่
                 if last_actual_visit['date'] != last_valid_visit['date']:
                     last_actual_str = last_actual_visit['date'].strftime('%d/%m/%Y')
                     st.caption(f"ℹ️ (ล่าสุดเมื่อ {last_actual_str} ไม่ได้เป่า Peak Flow ระบบจึงแสดงผลจากครั้งก่อนหน้า)")
@@ -158,17 +137,13 @@ def render_search_patient(patients_db, visits_db, base_url):
                 s2.metric("% มาตรฐาน", f"{pct_std}%")
                 s3.markdown(f":{zone_color}[**{zone_name}**]")
                 s4.write(last_valid_visit.get('control_level', '-'))
-            
             else:
-                # กรณีไม่เคยเป่าเลย
                 st.warning("⚠️ ยังไม่มีข้อมูลการเป่า Peak Flow (มีแต่ประวัติรับยา)")
             
-            # Alert DRP (จากครั้งล่าสุดจริง)
             last_drp = str(last_actual_visit.get('drp', '')).strip()
             if last_drp and last_drp != "-" and last_drp.lower() != "nan":
                 st.warning(f"⚠️ **DRP ครั้งล่าสุด:** {last_drp}")
 
-            # Alert Tech Status
             tech_status, tech_days, tech_last_date = check_technique_status(pt_visits)
             st.write("") 
             if tech_status == "overdue":
@@ -181,7 +156,6 @@ def render_search_patient(patients_db, visits_db, base_url):
         st.divider()
         st.subheader("📈 กราฟติดตามอาการ")
         if not pt_visits.empty:
-            # ✅ ส่งเฉพาะข้อมูลที่มีการเป่าจริงไปพลอตกราฟ (เส้นจะไม่ดิ่งลง 0)
             valid_pefr_visits_all = pt_visits_sorted[pt_visits_sorted['pefr'] > 0]
             if not valid_pefr_visits_all.empty:
                 chart = plot_pefr_chart(valid_pefr_visits_all, ref_pefr)
@@ -201,7 +175,7 @@ def render_search_patient(patients_db, visits_db, base_url):
         st.divider()
         st.subheader("📝 บันทึก Visit")
         
-        # --- ส่วนประเมินเทคนิคพ่นยา (Interactive) ---
+        # --- Checklist สอนเทคนิค ---
         inhaler_summary_text = "-" 
         tech_check_status = "ไม่"
 
@@ -258,7 +232,7 @@ def render_search_patient(patients_db, visits_db, base_url):
                 if adv_rinse: inhaler_summary_text += " | Adv:Rinse"
                 if adv_clean: inhaler_summary_text += " | Adv:Clean"
 
-        # --- ฟอร์มบันทึกหลัก ---
+        # --- Form บันทึก ---
         with st.form("new_visit", clear_on_submit=True):
             col_a, col_b = st.columns(2)
             v_date = col_a.date_input("วันที่", value=datetime.today())
@@ -310,11 +284,13 @@ def render_search_patient(patients_db, visits_db, base_url):
         # 📇 DIGITAL ASTHMA CARD
         st.divider()
         st.subheader("📇 Digital Asthma Card")
-        # ใช้ Token Link
+        # ✅ เปลี่ยนกลับมาใช้ HN Link ตรงนี้
+        link = f"{base_url}/?hn={selected_hn}"
+        
         with st.container(border=True):
             c_qr, c_info = st.columns([1, 2.5])
             with c_qr:
-                st.image(generate_qr(secure_link), use_container_width=True)
+                st.image(generate_qr(link), use_container_width=True)
                 st.caption("📱 สแกนเพื่อดูประวัติ")
             with c_info:
                 st.markdown(f"### {pt_data['prefix']}{pt_data['first_name']} {pt_data['last_name']}")
@@ -323,7 +299,7 @@ def render_search_patient(patients_db, visits_db, base_url):
                 c_age.markdown(f"**อายุ:** {age} ปี")
                 c_height.markdown(f"**ส่วนสูง:** {height} cm")
                 st.info(f"🎯 **Predicted PEFR:** {int(predicted_pefr)} L/min")
-                st.link_button("🔗 เปิดหน้าคนไข้ (Patient View)", secure_link, type="primary", use_container_width=True)
+                st.link_button("🔗 เปิดหน้าคนไข้ (Patient View)", link, type="primary", use_container_width=True)
         
         with st.expander("🔗 คัดลอกลิงก์โดยตรง"):
-            st.text_input("Direct Link", value=secure_link, label_visibility="collapsed")
+            st.text_input("Direct Link", value=link, label_visibility="collapsed")
