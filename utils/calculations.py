@@ -8,7 +8,6 @@ def calculate_predicted_pefr(age, height, gender_prefix):
     age = int(age)
     height = int(height)
     
-    # สูตรคำนวณมาตรฐาน (อ้างอิงประชากรไทย)
     if gender_prefix in ["นาย", "ด.ช."]:
         predicted = (5.48 * height) - (1.51 * age) - 279.7
     else:
@@ -47,7 +46,7 @@ def get_action_plan_zone(current_pefr, predicted_pefr):
             🏥 <b>สำคัญ:</b> ต้องรีบกลับไปพบแพทย์ 'ก่อนวันนัด' หากมีอาการแย่ลง หรือพ่นยาฉุกเฉินแล้วอาการยังไม่ทุเลา"""
         )
 
-# 4. วาดกราฟแนวโน้ม (Trend Chart)
+# 4. วาดกราฟแนวโน้ม (Trend Chart) - ✅ แก้ไขให้ Zoom ได้แล้ว
 def plot_pefr_chart(visits_df, predicted_pefr):
     df = visits_df.copy()
     df['date'] = pd.to_datetime(df['date'])
@@ -59,19 +58,19 @@ def plot_pefr_chart(visits_df, predicted_pefr):
         tooltip=['date', 'pefr']
     )
     
-    # เส้นแบ่งโซน (ขีดเส้นประ)
+    # เส้นแบ่งโซน
     rule_green = alt.Chart(pd.DataFrame({'y': [predicted_pefr * 0.8]})).mark_rule(color='#66BB6A', strokeDash=[5, 5]).encode(y='y')
     rule_red = alt.Chart(pd.DataFrame({'y': [predicted_pefr * 0.6]})).mark_rule(color='#EF5350', strokeDash=[5, 5]).encode(y='y')
     
-    return (line + rule_green + rule_red).properties(height=300)
+    # ✅ เพิ่ม .interactive() ตรงนี้ เพื่อให้ Zoom/Pan ได้
+    return (line + rule_green + rule_red).properties(height=300).interactive()
 
-# 5. ตรวจสอบสถานะเทคนิคพ่นยา (Technique Status)
+# 5. ตรวจสอบสถานะเทคนิคพ่นยา
 def check_technique_status(visits_df):
     if visits_df.empty:
         return "never", 0, None
 
     visits_df['date'] = pd.to_datetime(visits_df['date'])
-    # หาครั้งล่าสุดที่มีการ "ทำ" (สอน/ประเมิน)
     tech_visits = visits_df[visits_df['technique_check'].astype(str).str.contains("ทำ", na=False)].sort_values(by='date')
     
     if tech_visits.empty:
@@ -85,7 +84,7 @@ def check_technique_status(visits_df):
     else:
         return "valid", days_since, last_tech_date
 
-# 6. สร้าง QR Code (ตัวปัญหาที่หายไป)
+# 6. สร้าง QR Code
 def generate_qr(data):
     qr = qrcode.QRCode(
         version=1,
@@ -98,7 +97,6 @@ def generate_qr(data):
 
     img = qr.make_image(fill_color="black", back_color="white")
     
-    # แปลงเป็น Bytes เพื่อแสดงใน Streamlit
     img_byte_arr = io.BytesIO()
     img.save(img_byte_arr, format='PNG')
     return img_byte_arr.getvalue()
