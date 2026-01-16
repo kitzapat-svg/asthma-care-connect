@@ -46,7 +46,7 @@ def get_action_plan_zone(current_pefr, predicted_pefr):
             🏥 <b>สำคัญ:</b> ต้องรีบกลับไปพบแพทย์ 'ก่อนวันนัด' หากมีอาการแย่ลง หรือพ่นยาฉุกเฉินแล้วอาการยังไม่ทุเลา"""
         )
 
-# 4. วาดกราฟแนวโน้ม (Trend Chart) - ✅ แก้ไขจุดที่ Error
+# 4. วาดกราฟแนวโน้ม (Trend Chart) - ✅ แก้ไขจุดตกขอบ
 def plot_pefr_chart(visits_df, predicted_pefr):
     df = visits_df.copy()
     df['date'] = pd.to_datetime(df['date'])
@@ -56,8 +56,14 @@ def plot_pefr_chart(visits_df, predicted_pefr):
     line = base.mark_line(point=True).encode(
         y=alt.Y(
             'pefr', 
-            # ✅ แก้ไข: เอา title และ titlePadding เข้าไปอยู่ใน alt.Axis(...) ให้ถูกต้อง
-            axis=alt.Axis(title='ค่าการเป่าปอด (L/min)', titlePadding=20), 
+            # ✅ ปรับ Title ให้อยู่ "ด้านบน" แกน (แนวนอน) อ่านง่ายและไม่ตกขอบ
+            axis=alt.Axis(
+                title='ค่าการเป่าปอด (L/min)', 
+                titleAngle=0,       # ไม่หมุนตัวหนังสือ
+                titleAlign='left',  # ชิดซ้าย
+                titleY=-10,         # ขยับขึ้นไปไว้เหนือแกน
+                titleX=0            # ตำแหน่ง X เริ่มต้น
+            ),
             scale=alt.Scale(domain=[0, 800])
         ),
         tooltip=[
@@ -69,7 +75,10 @@ def plot_pefr_chart(visits_df, predicted_pefr):
     rule_green = alt.Chart(pd.DataFrame({'y': [predicted_pefr * 0.8]})).mark_rule(color='#66BB6A', strokeDash=[5, 5]).encode(y='y')
     rule_red = alt.Chart(pd.DataFrame({'y': [predicted_pefr * 0.6]})).mark_rule(color='#EF5350', strokeDash=[5, 5]).encode(y='y')
     
-    return (line + rule_green + rule_red).properties(height=300).interactive()
+    chart = (line + rule_green + rule_red).properties(height=300).interactive()
+    
+    # ✅ เพิ่ม Padding (ขอบเขต) รอบกราฟ เพื่อให้แน่ใจว่าตัวหนังสือจะไม่โดนตัด
+    return chart.configure(padding={'left': 20, 'top': 20, 'right': 10, 'bottom': 10})
 
 # 5. ตรวจสอบสถานะเทคนิคพ่นยา
 def check_technique_status(visits_df):
