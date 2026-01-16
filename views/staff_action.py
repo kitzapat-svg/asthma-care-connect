@@ -135,8 +135,30 @@ def render_search_patient(patients_db, visits_db, base_url):
                 s1, s2, s3, s4 = st.columns(4)
                 s1.metric("PEFR ล่าสุด", f"{current_pefr}")
                 s2.metric("% มาตรฐาน", f"{pct_std}%")
-                s3.markdown(f":{zone_color}[**{zone_name}**]")
-                s4.write(last_valid_visit.get('control_level', '-'))
+                
+                # ✅ ปรับปรุงส่วนแสดงผล Zone ให้สวยงามด้วย HTML
+                with s3:
+                    st.write("Zone:") # Label หัวข้อ
+                    st.markdown(
+                        f"""
+                        <div style="
+                            background-color: {zone_color}25;
+                            color: {zone_color};
+                            padding: 5px 10px;
+                            border-radius: 8px;
+                            text-align: center;
+                            font-weight: bold;
+                            border: 1px solid {zone_color};
+                            font-size: 0.9em;
+                        ">
+                            {zone_name}
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                
+                s4.metric("Control Level", last_valid_visit.get('control_level', '-'))
+
             else:
                 st.warning("⚠️ ยังไม่มีข้อมูลการเป่า Peak Flow (มีแต่ประวัติรับยา)")
             
@@ -284,7 +306,6 @@ def render_search_patient(patients_db, visits_db, base_url):
         # 📇 DIGITAL ASTHMA CARD
         st.divider()
         st.subheader("📇 Digital Asthma Card")
-        # ✅ เปลี่ยนกลับมาใช้ HN Link ตรงนี้
         link = f"{base_url}/?hn={selected_hn}"
         
         with st.container(border=True):
