@@ -46,7 +46,7 @@ def get_action_plan_zone(current_pefr, predicted_pefr):
             🏥 <b>สำคัญ:</b> ต้องรีบกลับไปพบแพทย์ 'ก่อนวันนัด' หากมีอาการแย่ลง หรือพ่นยาฉุกเฉินแล้วอาการยังไม่ทุเลา"""
         )
 
-# 4. วาดกราฟแนวโน้ม (Trend Chart) - ✅ แก้ไขให้ Zoom ได้แล้ว
+# 4. วาดกราฟแนวโน้ม (Trend Chart) - ✅ แก้ไขชื่อแกนและระยะห่าง
 def plot_pefr_chart(visits_df, predicted_pefr):
     df = visits_df.copy()
     df['date'] = pd.to_datetime(df['date'])
@@ -54,15 +54,22 @@ def plot_pefr_chart(visits_df, predicted_pefr):
     base = alt.Chart(df).encode(x=alt.X('date', title='วันที่'))
     
     line = base.mark_line(point=True).encode(
-        y=alt.Y('pefr', title='PEFR (L/min)', scale=alt.Scale(domain=[0, 800])),
-        tooltip=['date', 'pefr']
+        y=alt.Y(
+            'pefr', 
+            title='ค่าการเป่าปอด (L/min)', # ✅ เปลี่ยนชื่อเป็นไทย
+            titlePadding=20,              # ✅ เพิ่มระยะห่างกันตกขอบ
+            scale=alt.Scale(domain=[0, 800])
+        ),
+        tooltip=[
+            alt.Tooltip('date', title='วันที่', format='%d/%m/%Y'),
+            alt.Tooltip('pefr', title='ค่า PEFR')
+        ]
     )
     
     # เส้นแบ่งโซน
     rule_green = alt.Chart(pd.DataFrame({'y': [predicted_pefr * 0.8]})).mark_rule(color='#66BB6A', strokeDash=[5, 5]).encode(y='y')
     rule_red = alt.Chart(pd.DataFrame({'y': [predicted_pefr * 0.6]})).mark_rule(color='#EF5350', strokeDash=[5, 5]).encode(y='y')
     
-    # ✅ เพิ่ม .interactive() ตรงนี้ เพื่อให้ Zoom/Pan ได้
     return (line + rule_green + rule_red).properties(height=300).interactive()
 
 # 5. ตรวจสอบสถานะเทคนิคพ่นยา
@@ -100,3 +107,4 @@ def generate_qr(data):
     img_byte_arr = io.BytesIO()
     img.save(img_byte_arr, format='PNG')
     return img_byte_arr.getvalue()
+
