@@ -2,11 +2,11 @@ import streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import uuid # ✅ ต้องมี import uuid สำหรับสร้าง Token
 
 # --- CONFIGURATION ---
-# ใส่ ID ของ Google Sheet คุณที่นี่
-SHEET_ID = st.secrets.get("sheet_id", "1LF9Yi6CXHaiITVCqj9jj1agEdEE9S-37FwnaxNIlAaE") 
+SHEET_ID = "1LF9Yi6CXHaiITVCqj9jj1agEdEE9S-37FwnaxNIlAaE"
+PATIENTS_SHEET_NAME = "patients"
+VISITS_SHEET_NAME = "visits"
 
 def connect_to_gsheet():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -66,11 +66,13 @@ def load_data_staff(worksheet_name):
         st.error(f"Error: {e}")
         st.stop()
 
+# ✅ ฟังก์ชันนี้คือจุดที่มักจะ Error (ผมเช็ค Comma ให้ครบแล้ว)
 def save_visit_data(data_dict):
     client = connect_to_gsheet()
     sh = client.open_by_key(SHEET_ID)
     worksheet = sh.worksheet("visits")
     
+    # ดึงค่าประเมิน (ถ้าไม่มีให้เป็น -)
     inhaler_result = data_dict.get("inhaler_eval", "-")
 
     row = [
@@ -87,7 +89,7 @@ def save_visit_data(data_dict):
         data_dict["next_appt"], 
         data_dict["note"], 
         data_dict["is_new_case"],
-        inhaler_result
+        inhaler_result  # ✅ ต้องไม่มี Comma เกินหรือขาด
     ]
     worksheet.append_row(row)
     load_data_staff.clear()
@@ -98,9 +100,7 @@ def save_patient_data(data_dict):
     sh = client.open_by_key(SHEET_ID)
     worksheet = sh.worksheet("patients")
     
-    # สร้าง Token อัตโนมัติสำหรับคนไข้ใหม่
-    new_token = str(uuid.uuid4())
-    
+    # เพิ่ม Active เป็นค่า Default คอลัมน์ที่ 8
     row = [
         str(data_dict['hn']), 
         data_dict["prefix"], 
@@ -109,8 +109,7 @@ def save_patient_data(data_dict):
         data_dict["dob"], 
         data_dict["best_pefr"], 
         data_dict["height"], 
-        "Active",
-        new_token # บันทึก Token ลงคอลัมน์ I
+        "Active"  
     ]
     worksheet.append_row(row)
     load_data_staff.clear()
@@ -124,7 +123,7 @@ def update_patient_status(hn, new_status):
     try:
         cell = worksheet.find(str(hn))
         if cell:
-            # สมมติ Status อยู่คอลัมน์ 8 (H)
+            # อัปเดตสถานะที่คอลัมน์ 8 (H) ของแถวนั้น
             worksheet.update_cell(cell.row, 8, new_status)
             load_data_staff.clear()
             load_data_fast.clear()
@@ -133,25 +132,4 @@ def update_patient_status(hn, new_status):
             return False
     except Exception as e:
         st.error(f"Update Status Error: {e}")
-        return False
-
-# ✅ ฟังก์ชันที่ขาดไป (ทำให้เกิด Error)
-def update_patient_token(hn, new_token):
-    client = connect_to_gsheet()
-    sh = client.open_by_key(SHEET_ID)
-    worksheet = sh.worksheet("patients")
-    
-    try:
-        cell = worksheet.find(str(hn))
-        if cell:
-            # สมมติ Token อยู่คอลัมน์ 9 (I)
-            # ถ้าใน Google Sheet คุณคอลัมน์ Token ไม่ใช่ I อาจต้องแก้เลข 9 เป็นเลขอื่น
-            worksheet.update_cell(cell.row, 9, new_token)
-            load_data_staff.clear()
-            load_data_fast.clear()
-            return True
-        else:
-            return False
-    except Exception as e:
-        st.error(f"Update Token Error: {e}")
         return False
