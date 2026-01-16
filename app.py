@@ -1,33 +1,58 @@
 import streamlit as st
-from utils.gsheet_handler import load_data_staff
-from views.patient_view import show_patient_view
+import pandas as pd
+
+# Import Utils
+from utils.gsheet_handler import load_data_staff, load_data_fast
+
+# Import Views (รวมฟีเจอร์ใหม่ทั้งหมด)
+from views.patient_view import render_patient_view
 from views.staff_dashboard import render_dashboard
 from views.staff_action import render_register_patient, render_search_patient
 
+# --- Page Config ---
 st.set_page_config(page_title="Asthma Care Connect", layout="centered", page_icon="🫁")
 
-# --- Security Config ---
+# ==========================================
+# 🔐 SECURITY & CONFIG (กลับมาใช้ Logic เดิมของคุณ)
+# ==========================================
 if "admin_password" not in st.secrets:
     st.error("❌ ไม่พบรหัสผ่านผู้ดูแลระบบ (กรุณาตั้งค่า admin_password ใน secrets.toml)")
     st.stop()
+
 ADMIN_PASSWORD = st.secrets["admin_password"]
 
+# ตรวจสอบ URL สำหรับสร้าง QR Code
 if "deploy_url" in st.secrets:
     BASE_URL = st.secrets["deploy_url"].rstrip("/")
 else:
-    BASE_URL = "http://localhost:8501"
+    BASE_URL = "http://localhost:8501" # หรือ URL ของ Streamlit Cloud คุณ
 
-# --- Main App Logic ---
+# ==========================================
+# 🏥 MAIN APP LOGIC
+# ==========================================
 query_params = st.query_params
 target_hn = query_params.get("hn", None)
 
 if target_hn:
-    # 🟢 Patient View
-    show_patient_view(target_hn)
+    # ---------------------------------------------------
+    # 🟢 PATIENT VIEW (มุมมองคนไข้)
+    # ---------------------------------------------------
+    # โหลดข้อมูลแบบ Fast Load
+    patients_db = load_data_fast("patients")
+    visits_db = load_data_fast("visits")
+    
+    # เรียกใช้ไฟล์ views/patient_view.py ที่เราแยกออกมา
+    render_patient_view(target_hn, patients_db, visits_db)
+
 else:
-    # 🔵 Staff View (Login Required)
+    # ---------------------------------------------------
+    # 🔵 STAFF VIEW (มุมมองเจ้าหน้าที่)
+    # ---------------------------------------------------
     st.sidebar.header("🏥 Asthma Clinic")
-    if 'logged_in' not in st.session_state: st.session_state.logged_in = False
+    
+    # --- Login System (Logic เดิมของคุณ) ---
+    if 'logged_in' not in st.session_state:
+        st.session_state.logged_in = False
 
     if not st.session_state.logged_in:
         st.title("🔐 เข้าสู่ระบบเจ้าหน้าที่")
@@ -38,25 +63,33 @@ else:
                 st.rerun()
             else:
                 st.error("❌ รหัสผ่านผิด")
-        st.stop()
+        st.stop() # หยุดทำงานถ้ายังไม่ Login
 
+    # --- ส่วนทำงานหลัง Login สำเร็จ ---
+    st.sidebar.success("สถานะ: เจ้าหน้าที่ (Logged In)")
+    
     if st.sidebar.button("🔓 ออกจากระบบ"):
         st.session_state.logged_in = False
         st.rerun()
-
-    st.sidebar.success("สถานะ: เจ้าหน้าที่ (Logged In)")
     
-    # Load Data ครั้งเดียว แล้วส่งต่อให้ View อื่นๆ
+    st.sidebar.divider()
+
+    # Load Data
     patients_db = load_data_staff("patients")
     visits_db = load_data_staff("visits")
 
-    mode = st.sidebar.radio("เมนูหลัก", ["🔍 ค้นหา/บันทึกอาการ", "➕ ลงทะเบียนผู้ป่วยใหม่", "📊 Dashboard ภาพรวม"])
+    # Menu
+    mode = st.sidebar.radio(
+        "เมนูหลัก", 
+        ["🔍 ค้นหา/บันทึกอาการ", "➕ ลงทะเบียนผู้ป่วยใหม่", "📊 Dashboard ภาพรวม"]
+    )
 
-    if mode == "📊 Dashboard ภาพรวม":
-        render_dashboard(visits_db, patients_db)
+    # Route ไปยัง View ต่างๆ
+    if mode == "🔍 ค้นหา/บันทึกอาการ":
+        render_search_patient(patients_db, visits_db, BASE_URL)
+        
     elif mode == "➕ ลงทะเบียนผู้ป่วยใหม่":
         render_register_patient(patients_db)
-    else:
-
-        render_search_patient(patients_db, visits_db, BASE_URL)
-
+        
+    elif mode == "📊 Dashboard ภาพรวม":
+        render_dashboard(visits_db, patients_db)
