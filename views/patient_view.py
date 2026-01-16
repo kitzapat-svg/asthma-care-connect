@@ -10,15 +10,18 @@ from utils.calculations import (
 
 def render_patient_view(target_hn, patients_db, visits_db):
     if target_hn in patients_db['hn'].values:
+        # ดึงข้อมูลคนไข้
         pt_data = patients_db[patients_db['hn'] == target_hn].iloc[0]
         pt_visits = visits_db[visits_db['hn'] == target_hn]
         
+        # คำนวณข้อมูลพื้นฐาน
         dob = pd.to_datetime(pt_data['dob'])
         age = (datetime.now() - dob).days // 365
         height = pt_data['height']
         predicted_pefr = calculate_predicted_pefr(age, height, pt_data['prefix'])
         ref_pefr = predicted_pefr if predicted_pefr > 0 else pt_data['best_pefr']
 
+        # ฟังก์ชัน Mask ชื่อ
         def mask_text(text):
             if pd.isna(text) or str(text).strip() == "": return "xxx"
             text = str(text)
@@ -39,10 +42,10 @@ def render_patient_view(target_hn, patients_db, visits_db):
             c2.markdown(f"**อายุ:** {age} ปี")
             st.info(f"🎯 **เป้าหมาย PEFR ของคุณ:** {int(ref_pefr)} L/min")
 
-        # --- นัดหมาย ---
+        # --- ส่วนวันนัดหมาย ---
         if not pt_visits.empty:
-            last_visit = pt_visits.sort_values(by="date").iloc[-1]
-            next_appt = str(last_visit.get('next_appt', '-')).strip()
+            last_visit_any = pt_visits.sort_values(by="date").iloc[-1] # เอาครั้งล่าสุดจริงๆ (แม้มารับยาแทน) เพื่อดูวันนัด
+            next_appt = str(last_visit_any.get('next_appt', '-')).strip()
             
             if next_appt and next_appt not in ['-', '', 'nan', 'None']:
                 try:
@@ -99,46 +102,63 @@ def render_patient_view(target_hn, patients_db, visits_db):
                     msg = f"ผ่านมาแล้ว {days_passed} วัน (เหลือเวลาอีก {days_remaining} วัน จะครบ 1 ปี)"
                     st.progress(progress_val, text=msg)
 
-        # --- ✅ ผลการประเมินล่าสุด (Action Plan Zone) ---
+        # --- ✅ ผลการประเมินล่าสุด (Logic ใหม่: กรอง 0 ออก) ---
         if not pt_visits.empty:
-            current_pefr = last_visit['pefr']
-            visit_date_str = pd.to_datetime(last_visit['date']).strftime('%d/%m/%Y')
+            pt_visits['date'] = pd.to_datetime(pt_visits['date'])
+            sorted_visits = pt_visits.sort_values(by="date")
             
-            zone_name, zone_color, advice = get_action_plan_zone(current_pefr, ref_pefr)
+            # 1. กรองหา Visit ที่มีการเป่าจริง (PEFR > 0)
+            valid_pefr_visits = sorted_visits[sorted_visits['pefr'] > 0]
             
-            st.divider()
-            st.subheader("ผลการประเมินล่าสุด")
-            st.metric("ค่า PEFR ล่าสุด", f"{current_pefr} L/min", f"{visit_date_str}")
-            
-            # การ์ดคำแนะนำแบบ HTML (รองรับ <br> และตัวหนา)
-            st.markdown(f"""
-            <div style="padding: 20px; border-radius: 10px; background-color: {zone_color}15; border: 2px solid {zone_color}; margin-bottom: 15px;">
-                <h3 style="color: {zone_color}; margin:0 0 10px 0;">{zone_name}</h3>
-                <div style="font-size: 16px; line-height: 1.6; color: #333;">
-                    {advice}
+            if not valid_pefr_visits.empty:
+                # เอาค่าล่าสุดที่มีการเป่าจริง
+                last_valid_visit = valid_pefr_visits.iloc[-1]
+                current_pefr = last_valid_visit['pefr']
+                visit_date_str = last_valid_visit['date'].strftime('%d/%m/%Y')
+                
+                zone_name, zone_color, advice = get_action_plan_zone(current_pefr, ref_pefr)
+                
+                st.divider()
+                st.subheader(f"ผลการประเมินล่าสุด ({visit_date_str})") # แสดงวันที่ให้ชัดเจน
+                
+                # เช็คว่าวันล่าสุดคือวันเดียวกับที่มีการเป่าจริงหรือไม่ (ถ้าไม่เท่า แปลว่าครั้งหลังสุดเป็นญาติรับแทน)
+                last_actual_date = sorted_visits.iloc[-1]['date'].strftime('%d/%m/%Y')
+                if visit_date_str != last_actual_date:
+                    st.caption(f"ℹ️ ข้อมูลล่าสุดเมื่อ {last_actual_date} ไม่ได้เป่า Peak Flow ระบบจึงแสดงผลจากครั้งก่อนหน้าแทน")
+
+                st.metric("ค่า PEFR ล่าสุด", f"{current_pefr} L/min", f"เมื่อ: {visit_date_str}")
+                
+                st.markdown(f"""
+                <div style="padding: 20px; border-radius: 10px; background-color: {zone_color}15; border: 2px solid {zone_color}; margin-bottom: 15px;">
+                    <h3 style="color: {zone_color}; margin:0 0 10px 0;">{zone_name}</h3>
+                    <div style="font-size: 16px; line-height: 1.6; color: #333;">
+                        {advice}
+                    </div>
                 </div>
-            </div>
-            """, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
 
-            # --- เพิ่มปุ่ม Action ตามความรุนแรง ---
-            if "Yellow" in zone_name or "Partially" in zone_name:
-                with st.expander("📢 วิธีใช้น้ำเกลือ/ยาพ่นฉุกเฉิน (คลิก)"):
-                     st.write("1. เขย่าหลอดกดยา...")
-                     st.write("2. หายใจออกให้สุด...")
-                     st.info("💡 ควรพกยาฉุกเฉินติดตัวตลอดเวลา")
+                # ปุ่ม Action
+                if "Yellow" in zone_name:
+                    with st.expander("📢 วิธีใช้น้ำเกลือ/ยาพ่นฉุกเฉิน (คลิก)"):
+                        st.write("1. เขย่าหลอดกดยา...")
+                        st.info("💡 ควรพกยาฉุกเฉินติดตัวตลอดเวลา")
+                elif "Red" in zone_name:
+                    col_btn1, col_btn2 = st.columns(2)
+                    with col_btn1:
+                        st.link_button("📞 โทรฉุกเฉิน 1669", "tel:1669", type="primary", use_container_width=True)
+                    with col_btn2:
+                        st.error("🚨 อาการวิกฤต! ห้ามรอช้า")
 
-            elif "Red" in zone_name or "Poorly" in zone_name:
-                col_btn1, col_btn2 = st.columns(2)
-                with col_btn1:
-                     # ปุ่มโทรฉุกเฉิน (ใช้ได้จริงบนมือถือ)
-                     st.link_button("📞 โทรฉุกเฉิน 1669", "tel:1669", type="primary", use_container_width=True)
-                with col_btn2:
-                     st.error("🚨 อาการวิกฤต! ห้ามรอช้า")
+                # กราฟ (ส่งเฉพาะข้อมูลที่มีการเป่าจริงไปพล็อต เพื่อไม่ให้กราฟตกเป็น 0)
+                st.subheader("แนวโน้มอาการ (Trends)")
+                chart = plot_pefr_chart(valid_pefr_visits, ref_pefr)
+                st.altair_chart(chart, use_container_width=True)
 
-            # กราฟ
-            st.subheader("แนวโน้มอาการ (Trends)")
-            chart = plot_pefr_chart(pt_visits, ref_pefr)
-            st.altair_chart(chart, use_container_width=True)
+            else:
+                # กรณีมีประวัติการรักษา แต่ไม่เคยเป่า Peak Flow เลย (ญาติรับแทนตลอด)
+                st.divider()
+                st.warning("⚠️ ไม่พบข้อมูลการเป่า Peak Flow (มีแต่ประวัติการรับยา)")
+                st.caption("กรุณาเป่า Peak Flow ในการนัดหมายครั้งถัดไป เพื่อประเมินอาการ")
             
         else:
             st.warning("ยังไม่มีประวัติการตรวจ")
