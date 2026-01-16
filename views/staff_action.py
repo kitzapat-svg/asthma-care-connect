@@ -95,7 +95,7 @@ def render_search_patient(patients_db, visits_db, base_url):
         c3.metric("ส่วนสูง", f"{height} cm")
         c4.metric("Standard PEFR", f"{int(predicted_pefr)}")
 
-        # --- Smart Form Variables ---
+        # --- Smart Form Variables (ดึงยาจาก Visit ล่าสุดจริง ไม่สน PEFR) ---
         controller_options = ["Seretide", "Budesonide", "Symbicort"]
         reliever_options = ["Salbutamol", "Berodual"]
         default_controllers = []
@@ -114,8 +114,11 @@ def render_search_patient(patients_db, visits_db, base_url):
             default_controllers = parse_meds(last_actual_visit.get('controller'), controller_options)
             default_relievers = parse_meds(last_actual_visit.get('reliever'), reliever_options)
 
-            # --- ส่วนแสดงสถานะล่าสุด (Logic กรอง PEFR > 0) ---
+            # ------------------------------------------------------------------
+            # ✅ ส่วนแสดงสถานะล่าสุด (Smart Filter + New UI)
+            # ------------------------------------------------------------------
             st.markdown("---")
+            # กรองหาเฉพาะที่มีการเป่าจริง (PEFR > 0)
             valid_pefr_visits = pt_visits_sorted[pt_visits_sorted['pefr'] > 0]
             
             if not valid_pefr_visits.empty:
@@ -128,44 +131,56 @@ def render_search_patient(patients_db, visits_db, base_url):
                 
                 st.info(f"📋 **สถานะล่าสุด ({visit_date_str})**")
                 
+                # แจ้งเตือนถ้าข้อมูลไม่ตรงกับวันล่าสุดจริง (กรณีญาติรับยา)
                 if last_actual_visit['date'] != last_valid_visit['date']:
                     last_actual_str = last_actual_visit['date'].strftime('%d/%m/%Y')
                     st.caption(f"ℹ️ (ล่าสุดเมื่อ {last_actual_str} ไม่ได้เป่า Peak Flow ระบบจึงแสดงผลจากครั้งก่อนหน้า)")
                 
-                s1, s2, s3, s4 = st.columns(4)
+                # 🔥 ปรับ Layout ให้กว้างขึ้นเพื่อรองรับ Badge
+                s1, s2, s3, s4 = st.columns([1, 1, 1.7, 1.3])
+                
                 s1.metric("PEFR ล่าสุด", f"{current_pefr}")
                 s2.metric("% มาตรฐาน", f"{pct_std}%")
                 
-                # ✅ ปรับปรุงส่วนแสดงผล Zone ให้สวยงามด้วย HTML
+                # 🔥 Custom HTML Badge สำหรับ Zone
                 with s3:
-                    st.write("Zone:") # Label หัวข้อ
-                    st.markdown(
-                        f"""
-                        <div style="
-                            background-color: {zone_color}25;
-                            color: {zone_color};
-                            padding: 5px 10px;
-                            border-radius: 8px;
-                            text-align: center;
-                            font-weight: bold;
-                            border: 1px solid {zone_color};
-                            font-size: 0.9em;
-                        ">
-                            {zone_name}
+                    # ตัดคำว่า "Zone" ออกเพื่อให้สั้นลง (ถ้าต้องการ) หรือแสดงเต็มก็ได้
+                    # short_zone_name = zone_name.replace("Zone", "").strip() 
+                    short_zone_name = zone_name # ใช้ชื่อเต็มตามที่คุณต้องการ
+                    
+                    st.markdown(f"""
+                        <div style="display: flex; flex-direction: column; justify-content: flex-start;">
+                            <span style="font-size: 14px; color: #606570; margin-bottom: 4px;">Zone</span>
+                            <div style="
+                                background-color: {zone_color}15;
+                                color: {zone_color};
+                                border: 1px solid {zone_color};
+                                padding: 6px 12px;
+                                border-radius: 20px; 
+                                text-align: center;
+                                font-weight: 600;
+                                font-size: 16px;
+                                line-height: 1.2;
+                                white-space: nowrap;
+                                overflow: hidden;
+                                text-overflow: ellipsis;
+                            ">
+                                {short_zone_name}
+                            </div>
                         </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
+                    """, unsafe_allow_html=True)
                 
                 s4.metric("Control Level", last_valid_visit.get('control_level', '-'))
 
             else:
                 st.warning("⚠️ ยังไม่มีข้อมูลการเป่า Peak Flow (มีแต่ประวัติรับยา)")
             
+            # Alert DRP
             last_drp = str(last_actual_visit.get('drp', '')).strip()
             if last_drp and last_drp != "-" and last_drp.lower() != "nan":
                 st.warning(f"⚠️ **DRP ครั้งล่าสุด:** {last_drp}")
 
+            # Alert Tech Status
             tech_status, tech_days, tech_last_date = check_technique_status(pt_visits)
             st.write("") 
             if tech_status == "overdue":
@@ -178,6 +193,7 @@ def render_search_patient(patients_db, visits_db, base_url):
         st.divider()
         st.subheader("📈 กราฟติดตามอาการ")
         if not pt_visits.empty:
+            # กราฟแสดงเฉพาะจุดที่มีการเป่าจริง
             valid_pefr_visits_all = pt_visits_sorted[pt_visits_sorted['pefr'] > 0]
             if not valid_pefr_visits_all.empty:
                 chart = plot_pefr_chart(valid_pefr_visits_all, ref_pefr)
@@ -197,7 +213,7 @@ def render_search_patient(patients_db, visits_db, base_url):
         st.divider()
         st.subheader("📝 บันทึก Visit")
         
-        # --- Checklist สอนเทคนิค ---
+        # --- Checklist สอนเทคนิค (Interactive) ---
         inhaler_summary_text = "-" 
         tech_check_status = "ไม่"
 
@@ -306,6 +322,7 @@ def render_search_patient(patients_db, visits_db, base_url):
         # 📇 DIGITAL ASTHMA CARD
         st.divider()
         st.subheader("📇 Digital Asthma Card")
+        # ใช้ HN Link (ตามที่ User เลือก)
         link = f"{base_url}/?hn={selected_hn}"
         
         with st.container(border=True):
