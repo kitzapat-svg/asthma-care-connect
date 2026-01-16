@@ -46,7 +46,7 @@ def get_action_plan_zone(current_pefr, predicted_pefr):
             🏥 <b>สำคัญ:</b> ต้องรีบกลับไปพบแพทย์ 'ก่อนวันนัด' หากมีอาการแย่ลง หรือพ่นยาฉุกเฉินแล้วอาการยังไม่ทุเลา"""
         )
 
-# 4. วาดกราฟแนวโน้ม (Trend Chart) - ✅ แก้ไข Padding ขอบซ้าย
+# 4. วาดกราฟแนวโน้ม (Trend Chart) - ✅ เพิ่มพื้นที่กันตกขอบ
 def plot_pefr_chart(visits_df, predicted_pefr):
     df = visits_df.copy()
     df['date'] = pd.to_datetime(df['date'])
@@ -56,7 +56,7 @@ def plot_pefr_chart(visits_df, predicted_pefr):
     line = base.mark_line(point=True).encode(
         y=alt.Y(
             'pefr', 
-            title='ค่าการเป่าปอด (L/min)', # กลับมาใช้ชื่อด้านข้างเหมือนเดิม
+            title='ค่าการเป่าปอด (L/min)', 
             scale=alt.Scale(domain=[0, 800])
         ),
         tooltip=[
@@ -70,8 +70,8 @@ def plot_pefr_chart(visits_df, predicted_pefr):
     
     chart = (line + rule_green + rule_red).properties(height=300).interactive()
     
-    # ✅ เพิ่ม Padding ด้านซ้าย 50px เพื่อกันไม่ให้ชื่อแกนตกขอบจอ
-    return chart.configure(padding={'left': 50, 'top': 10, 'right': 10, 'bottom': 10})
+    # ✅ ปรับ left padding จาก 50 เป็น 70 (เผื่อที่ให้แกน Y เวลา Zoom Out)
+    return chart.configure(padding={'left': 70, 'top': 10, 'right': 10, 'bottom': 10})
 
 # 5. ตรวจสอบสถานะเทคนิคพ่นยา
 def check_technique_status(visits_df):
