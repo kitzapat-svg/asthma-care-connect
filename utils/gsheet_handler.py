@@ -76,6 +76,7 @@ def save_visit_data(data_dict):
         data_dict["adherence"], data_dict["drp"], data_dict["advice"],
         data_dict["technique_check"], data_dict["next_appt"], 
         data_dict["note"], data_dict["is_new_case"]
+        inhaler_result #
     ]
     worksheet.append_row(row)
     load_data_staff.clear()
@@ -114,3 +115,4 @@ def update_patient_status(hn, new_status):
     except Exception as e:
         st.error(f"Update Status Error: {e}")
         return False
+
