@@ -66,17 +66,30 @@ def load_data_staff(worksheet_name):
         st.error(f"Error: {e}")
         st.stop()
 
+# ✅ ฟังก์ชันนี้คือจุดที่มักจะ Error (ผมเช็ค Comma ให้ครบแล้ว)
 def save_visit_data(data_dict):
     client = connect_to_gsheet()
     sh = client.open_by_key(SHEET_ID)
     worksheet = sh.worksheet("visits")
+    
+    # ดึงค่าประเมิน (ถ้าไม่มีให้เป็น -)
+    inhaler_result = data_dict.get("inhaler_eval", "-")
+
     row = [
-        str(data_dict["hn"]), data_dict["date"], data_dict["pefr"],
-        data_dict["control_level"], data_dict["controller"], data_dict["reliever"],
-        data_dict["adherence"], data_dict["drp"], data_dict["advice"],
-        data_dict["technique_check"], data_dict["next_appt"], 
-        data_dict["note"], data_dict["is_new_case"]
-        inhaler_result #
+        str(data_dict["hn"]), 
+        data_dict["date"], 
+        data_dict["pefr"],
+        data_dict["control_level"], 
+        data_dict["controller"], 
+        data_dict["reliever"],
+        data_dict["adherence"], 
+        data_dict["drp"], 
+        data_dict["advice"],
+        data_dict["technique_check"], 
+        data_dict["next_appt"], 
+        data_dict["note"], 
+        data_dict["is_new_case"],
+        inhaler_result  # ✅ ต้องไม่มี Comma เกินหรือขาด
     ]
     worksheet.append_row(row)
     load_data_staff.clear()
@@ -86,17 +99,22 @@ def save_patient_data(data_dict):
     client = connect_to_gsheet()
     sh = client.open_by_key(SHEET_ID)
     worksheet = sh.worksheet("patients")
-    # ✅ เพิ่ม Active เป็นค่า Default คอลัมน์ที่ 8
+    
+    # เพิ่ม Active เป็นค่า Default คอลัมน์ที่ 8
     row = [
-        str(data_dict['hn']), data_dict["prefix"], data_dict["first_name"],
-        data_dict["last_name"], data_dict["dob"], data_dict["best_pefr"], 
-        data_dict["height"], "Active"  
+        str(data_dict['hn']), 
+        data_dict["prefix"], 
+        data_dict["first_name"],
+        data_dict["last_name"], 
+        data_dict["dob"], 
+        data_dict["best_pefr"], 
+        data_dict["height"], 
+        "Active"  
     ]
     worksheet.append_row(row)
     load_data_staff.clear()
     load_data_fast.clear()
 
-# ✅ ฟังก์ชันอัปเดตสถานะ (ต้องมี!)
 def update_patient_status(hn, new_status):
     client = connect_to_gsheet()
     sh = client.open_by_key(SHEET_ID)
@@ -115,4 +133,3 @@ def update_patient_status(hn, new_status):
     except Exception as e:
         st.error(f"Update Status Error: {e}")
         return False
-
