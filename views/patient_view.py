@@ -14,18 +14,17 @@ def render_patient_view(target_hn, patients_db, visits_db):
         pt_data = patients_db[patients_db['hn'] == target_hn].iloc[0]
         pt_visits = visits_db[visits_db['hn'] == target_hn]
         
-        # คำนวณข้อมูลพื้นฐาน (อายุ, ส่วนสูง, Predicted PEFR)
+        # คำนวณข้อมูลพื้นฐาน
         dob = pd.to_datetime(pt_data['dob'])
         age = (datetime.now() - dob).days // 365
         height = pt_data['height']
         predicted_pefr = calculate_predicted_pefr(age, height, pt_data['prefix'])
         ref_pefr = predicted_pefr if predicted_pefr > 0 else pt_data['best_pefr']
 
-        # --- ส่วน Header และข้อมูลส่วนตัว ---
+        # --- Header ---
         st.image("https://img.icons8.com/color/96/asthma.png", width=60)
         st.title(f"สวัสดี คุณ{pt_data['first_name']} 👋")
         
-        # Card แสดงข้อมูลเบื้องต้น
         with st.container(border=True):
             c1, c2 = st.columns(2)
             c1.markdown(f"**HN:** `{target_hn}`")
@@ -33,15 +32,16 @@ def render_patient_view(target_hn, patients_db, visits_db):
             st.info(f"🎯 **เป้าหมาย PEFR ของคุณ:** {int(ref_pefr)} L/min")
 
         # ---------------------------------------------------------
-        # ✅ ส่วนแสดงสถานะเทคนิคพ่นยา (Inhaler Technique Status)
+        # ✅ ส่วนแสดงสถานะเทคนิคพ่นยา (Recalculate Days Locally)
         # ---------------------------------------------------------
-        tech_status, tech_days, tech_last_date = check_technique_status(pt_visits)
+        tech_status, _, tech_last_date = check_technique_status(pt_visits)
+        # หมายเหตุ: เราไม่ใช้ tech_days จากฟังก์ชันแล้ว เพื่อป้องกันความผิดพลาด
+        # เราจะคำนวณ days_passed ใหม่เองข้างล่าง
 
         with st.container(border=True):
             c_icon, c_text = st.columns([1, 4])
             
             with c_icon:
-                # แสดงไอคอนสถานะ
                 if tech_status == "valid":
                     st.markdown("# ✅")
                 elif tech_status == "overdue":
@@ -58,29 +58,39 @@ def render_patient_view(target_hn, patients_db, visits_db):
                 elif tech_status == "overdue":
                     last_date_str = tech_last_date.strftime('%d/%m/%Y')
                     st.error(f"ครบกำหนดทบทวนแล้ว! (ล่าสุด: {last_date_str})")
-                    st.caption(f"เลยกำหนดมา {tech_days} วัน กรุณาให้เภสัชกรประเมินใหม่")
+                    st.caption(f"กรุณาให้เภสัชกรประเมินเทคนิคใหม่")
                 
-                else: # valid (สถานะปกติ ยังไม่หมดอายุ)
-                    # คำนวณวัน
-                    days_passed = tech_days            # ผ่านมาแล้วกี่วัน (เช่น 10 วัน)
-                    days_remaining = 365 - days_passed # เหลือเวลาอีกกี่วัน (เช่น 355 วัน)
+                else: # valid (ปกติ)
+                    # ✅ คำนวณวันใหม่ตรงนี้ (ใช้ วันปัจจุบัน - วันที่สอนจริง)
+                    # แปลง tech_last_date เป็น datetime ถ้าจำเป็น
+                    if isinstance(tech_last_date, pd.Timestamp):
+                        tech_last_date = tech_last_date.to_pydatetime()
+                    
+                    # คำนวณหา "ผ่านมาแล้วกี่วัน" (Days Passed)
+                    delta = datetime.now() - tech_last_date
+                    days_passed = delta.days
+                    if days_passed < 0: days_passed = 0 # กันพลาดกรณีวันที่ในอนาคต
+                    
+                    # คำนวณหา "เหลืออีกกี่วัน" (Days Remaining)
+                    days_remaining = 365 - days_passed
                     
                     last_date_str = tech_last_date.strftime('%d/%m/%Y')
                     st.success(f"ใช้งานได้ปกติ (สอนล่าสุด: {last_date_str})")
                     
-                    # Progress Bar: เต็ม 100% คือเพิ่งสอน, 0% คือหมดอายุ
-                    # สูตร: (วันคงเหลือ / 365) * 100
+                    # Progress Bar: 
+                    # ให้หลอดเต็ม (100%) = เพิ่งสอน (เวลาเหลือเยอะ)
+                    # หลอดหมด (0%) = ใกล้ครบปี (เวลาเหลือน้อย)
                     if days_remaining < 0: days_remaining = 0
                     progress_val = int((days_remaining / 365) * 100)
-                    progress_val = max(0, min(100, progress_val)) # บังคับค่าให้อยู่ 0-100
+                    progress_val = max(0, min(100, progress_val))
                     
-                    # ข้อความกำกับ (Label)
+                    # ข้อความ
                     msg = f"ผ่านมาแล้ว {days_passed} วัน (เหลือเวลาอีก {days_remaining} วัน จะครบ 1 ปี)"
                     st.progress(progress_val, text=msg)
 
         # ---------------------------------------------------------
 
-        # --- ส่วนแสดงผลการประเมินล่าสุด (Action Plan) ---
+        # สถานะล่าสุด (Action Plan)
         if not pt_visits.empty:
             pt_visits['date'] = pd.to_datetime(pt_visits['date'])
             last_visit = pt_visits.sort_values(by="date").iloc[-1]
@@ -92,7 +102,6 @@ def render_patient_view(target_hn, patients_db, visits_db):
             st.subheader("ผลการประเมินล่าสุด")
             st.metric("ค่า PEFR ล่าสุด", f"{current_pefr} L/min", f"{last_visit['date'].strftime('%d/%m/%Y')}")
             
-            # การ์ดแสดงคำแนะนำ (Action Plan)
             st.markdown(f"""
             <div style="padding: 20px; border-radius: 10px; background-color: {zone_color}20; border: 2px solid {zone_color};">
                 <h3 style="color: {zone_color}; margin:0;">{zone_name}</h3>
@@ -100,7 +109,6 @@ def render_patient_view(target_hn, patients_db, visits_db):
             </div>
             """, unsafe_allow_html=True)
             
-            # กราฟแนวโน้ม
             st.subheader("แนวโน้มอาการ (Trends)")
             chart = plot_pefr_chart(pt_visits, ref_pefr)
             st.altair_chart(chart, use_container_width=True)
