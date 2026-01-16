@@ -8,6 +8,7 @@ def calculate_predicted_pefr(age, height, gender_prefix):
     age = int(age)
     height = int(height)
     
+    # สูตรคำนวณมาตรฐาน (อ้างอิงประชากรไทย/Polgar หรือสูตรที่ใช้ในคลินิก)
     if gender_prefix in ["นาย", "ด.ช."]:
         predicted = (5.48 * height) - (1.51 * age) - 279.7
     else:
@@ -46,7 +47,7 @@ def get_action_plan_zone(current_pefr, predicted_pefr):
             🏥 <b>สำคัญ:</b> ต้องรีบกลับไปพบแพทย์ 'ก่อนวันนัด' หากมีอาการแย่ลง หรือพ่นยาฉุกเฉินแล้วอาการยังไม่ทุเลา"""
         )
 
-# 4. วาดกราฟแนวโน้ม (Trend Chart) - ✅ แก้ไขชื่อแกนและระยะห่าง
+# 4. วาดกราฟแนวโน้ม (Trend Chart)
 def plot_pefr_chart(visits_df, predicted_pefr):
     df = visits_df.copy()
     df['date'] = pd.to_datetime(df['date'])
@@ -56,20 +57,21 @@ def plot_pefr_chart(visits_df, predicted_pefr):
     line = base.mark_line(point=True).encode(
         y=alt.Y(
             'pefr', 
-            title='ค่าการเป่าปอด (L/min)', # ✅ เปลี่ยนชื่อเป็นไทย
-            titlePadding=20,              # ✅ เพิ่มระยะห่างกันตกขอบ
+            title='ค่าการเป่าปอด (L/min)', # ✅ ชื่อแกนภาษาไทย
+            titlePadding=20,              # ✅ เพิ่มระยะห่างกันข้อความตกขอบ
             scale=alt.Scale(domain=[0, 800])
         ),
         tooltip=[
-            alt.Tooltip('date', title='วันที่', format='%d/%m/%Y'),
+            alt.Tooltip('date', title='วันที่', format='%d/%m/%Y'), # ✅ Tooltip วันที่แบบไทย
             alt.Tooltip('pefr', title='ค่า PEFR')
         ]
     )
     
-    # เส้นแบ่งโซน
+    # เส้นแบ่งโซน (Green line at 80%, Red line at 60%)
     rule_green = alt.Chart(pd.DataFrame({'y': [predicted_pefr * 0.8]})).mark_rule(color='#66BB6A', strokeDash=[5, 5]).encode(y='y')
     rule_red = alt.Chart(pd.DataFrame({'y': [predicted_pefr * 0.6]})).mark_rule(color='#EF5350', strokeDash=[5, 5]).encode(y='y')
     
+    # ✅ เพิ่ม .interactive() เพื่อให้ Zoom/Pan ได้
     return (line + rule_green + rule_red).properties(height=300).interactive()
 
 # 5. ตรวจสอบสถานะเทคนิคพ่นยา
@@ -78,6 +80,7 @@ def check_technique_status(visits_df):
         return "never", 0, None
 
     visits_df['date'] = pd.to_datetime(visits_df['date'])
+    # หาครั้งล่าสุดที่มีการ "ทำ" (สอน/ประเมิน)
     tech_visits = visits_df[visits_df['technique_check'].astype(str).str.contains("ทำ", na=False)].sort_values(by='date')
     
     if tech_visits.empty:
@@ -107,4 +110,3 @@ def generate_qr(data):
     img_byte_arr = io.BytesIO()
     img.save(img_byte_arr, format='PNG')
     return img_byte_arr.getvalue()
-
