@@ -10,18 +10,15 @@ from utils.calculations import (
 
 def render_patient_view(target_hn, patients_db, visits_db):
     if target_hn in patients_db['hn'].values:
-        # ดึงข้อมูลคนไข้
         pt_data = patients_db[patients_db['hn'] == target_hn].iloc[0]
         pt_visits = visits_db[visits_db['hn'] == target_hn]
         
-        # คำนวณข้อมูลพื้นฐาน
         dob = pd.to_datetime(pt_data['dob'])
         age = (datetime.now() - dob).days // 365
         height = pt_data['height']
         predicted_pefr = calculate_predicted_pefr(age, height, pt_data['prefix'])
         ref_pefr = predicted_pefr if predicted_pefr > 0 else pt_data['best_pefr']
 
-        # --- Helper Function สำหรับ Mask ชื่อ ---
         def mask_text(text):
             if pd.isna(text) or str(text).strip() == "": return "xxx"
             text = str(text)
@@ -42,46 +39,32 @@ def render_patient_view(target_hn, patients_db, visits_db):
             c2.markdown(f"**อายุ:** {age} ปี")
             st.info(f"🎯 **เป้าหมาย PEFR ของคุณ:** {int(ref_pefr)} L/min")
 
-        # ---------------------------------------------------------
-        # 📅 ส่วนแสดงวันนัดถัดไป (เพิ่มใหม่)
-        # ---------------------------------------------------------
+        # --- นัดหมาย ---
         if not pt_visits.empty:
-            # เรียงข้อมูลเอาล่าสุดขึ้นมา
             last_visit = pt_visits.sort_values(by="date").iloc[-1]
             next_appt = str(last_visit.get('next_appt', '-')).strip()
             
-            # ถ้ามีวันนัด (ไม่ใช่ขีด หรือว่าง)
             if next_appt and next_appt not in ['-', '', 'nan', 'None']:
                 try:
-                    # พยายามแปลงรูปแบบวันที่ให้สวยงาม (ถ้าทำได้)
                     next_appt_dt = pd.to_datetime(next_appt)
                     formatted_date = next_appt_dt.strftime('%d/%m/%Y')
-                    
-                    # คำนวณอีกกี่วันถึงนัด
                     days_to_appt = (next_appt_dt - datetime.now()).days + 1
                     
                     if days_to_appt < 0:
                         msg_status = f"(เลยนัดมา {abs(days_to_appt)} วันแล้ว)"
                         icon = "⚠️"
-                        color = "red"
                     elif days_to_appt == 0:
                         msg_status = "(วันนัดคือวันนี้!)"
                         icon = "🚨"
-                        color = "red"
                     else:
                         msg_status = f"(อีก {days_to_appt} วัน)"
                         icon = "📅"
-                        color = "blue"
-
-                    st.info(f"{icon} **นัดครั้งถัดไป:** {formatted_date} {msg_status}")
                     
+                    st.info(f"{icon} **นัดครั้งถัดไป:** {formatted_date} {msg_status}")
                 except:
-                    # ถ้าแปลงวันที่ไม่ได้ ให้แสดงข้อความเดิมไปเลย
                     st.info(f"📅 **นัดครั้งถัดไป:** {next_appt}")
 
-        # ---------------------------------------------------------
-
-        # --- ส่วนแสดงสถานะเทคนิคพ่นยา ---
+        # --- เทคนิคพ่นยา ---
         tech_status, _, tech_last_date = check_technique_status(pt_visits)
         
         with st.container(border=True):
@@ -116,9 +99,8 @@ def render_patient_view(target_hn, patients_db, visits_db):
                     msg = f"ผ่านมาแล้ว {days_passed} วัน (เหลือเวลาอีก {days_remaining} วัน จะครบ 1 ปี)"
                     st.progress(progress_val, text=msg)
 
-        # --- ส่วนแสดงผลการประเมินล่าสุด (Action Plan) ---
+        # --- ✅ ผลการประเมินล่าสุด (Action Plan Zone) ---
         if not pt_visits.empty:
-            # (ใช้ตัวแปร last_visit จากข้างบนได้เลย)
             current_pefr = last_visit['pefr']
             visit_date_str = pd.to_datetime(last_visit['date']).strftime('%d/%m/%Y')
             
@@ -128,13 +110,32 @@ def render_patient_view(target_hn, patients_db, visits_db):
             st.subheader("ผลการประเมินล่าสุด")
             st.metric("ค่า PEFR ล่าสุด", f"{current_pefr} L/min", f"{visit_date_str}")
             
+            # การ์ดคำแนะนำแบบ HTML (รองรับ <br> และตัวหนา)
             st.markdown(f"""
-            <div style="padding: 20px; border-radius: 10px; background-color: {zone_color}20; border: 2px solid {zone_color};">
-                <h3 style="color: {zone_color}; margin:0;">{zone_name}</h3>
-                <p style="margin-top: 10px;"><strong>คำแนะนำ:</strong> {advice}</p>
+            <div style="padding: 20px; border-radius: 10px; background-color: {zone_color}15; border: 2px solid {zone_color}; margin-bottom: 15px;">
+                <h3 style="color: {zone_color}; margin:0 0 10px 0;">{zone_name}</h3>
+                <div style="font-size: 16px; line-height: 1.6; color: #333;">
+                    {advice}
+                </div>
             </div>
             """, unsafe_allow_html=True)
-            
+
+            # --- เพิ่มปุ่ม Action ตามความรุนแรง ---
+            if "Yellow" in zone_name or "Partially" in zone_name:
+                with st.expander("📢 วิธีใช้น้ำเกลือ/ยาพ่นฉุกเฉิน (คลิก)"):
+                     st.write("1. เขย่าหลอดกดยา...")
+                     st.write("2. หายใจออกให้สุด...")
+                     st.info("💡 ควรพกยาฉุกเฉินติดตัวตลอดเวลา")
+
+            elif "Red" in zone_name or "Poorly" in zone_name:
+                col_btn1, col_btn2 = st.columns(2)
+                with col_btn1:
+                     # ปุ่มโทรฉุกเฉิน (ใช้ได้จริงบนมือถือ)
+                     st.link_button("📞 โทรฉุกเฉิน 1669", "tel:1669", type="primary", use_container_width=True)
+                with col_btn2:
+                     st.error("🚨 อาการวิกฤต! ห้ามรอช้า")
+
+            # กราฟ
             st.subheader("แนวโน้มอาการ (Trends)")
             chart = plot_pefr_chart(pt_visits, ref_pefr)
             st.altair_chart(chart, use_container_width=True)
