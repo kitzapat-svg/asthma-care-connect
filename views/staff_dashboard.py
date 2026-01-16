@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 from datetime import datetime
+import io # ✅ เพิ่ม import io สำหรับจัดการไฟล์ในหน่วยความจำ
 
-# ✅ แก้บรรทัดนี้: รับ patients_df เพิ่มเข้ามา
 def render_dashboard(visits_df, patients_df):
     if visits_df.empty:
         st.warning("ยังไม่มีข้อมูลการตรวจเยี่ยม")
@@ -131,51 +131,73 @@ def render_dashboard(visits_df, patients_df):
     else:
         st.success("ยังไม่พบรายงานปัญหาการใช้ยา (DRP) ในระบบ")
 
-    # --- ✅ ส่วนที่ 5 (ใหม่): รายชื่อผู้รับบริการรายวัน ---
+    # --- ส่วนที่ 5: รายชื่อผู้รับบริการรายวัน ---
     st.divider()
     st.subheader("🗓️ 5. ตรวจสอบรายชื่อผู้รับบริการ (Daily Log)")
     
     col_date, col_summary = st.columns([1, 2])
     with col_date:
-        # ปฏิทินเลือกวันที่
         selected_date = st.date_input("เลือกวันที่ต้องการดูข้อมูล", value=datetime.today())
     
-    # กรองข้อมูลตามวันที่เลือก
     daily_visits = df[df['date'].dt.date == selected_date]
     
     if not daily_visits.empty:
-        # สรุปยอด
         daily_total = len(daily_visits)
         daily_new = len(daily_visits[daily_visits['is_new_case'].astype(str).str.upper() == 'TRUE'])
         
         with col_summary:
-            st.write("") # ดันลงมานิดนึง
+            st.write("")
             st.markdown(f"**สรุปยอดวันที่ {selected_date.strftime('%d/%m/%Y')}**")
             s1, s2 = st.columns(2)
             s1.metric("ทั้งหมด", f"{daily_total} คน")
             s2.metric("รายใหม่ (New)", f"{daily_new} คน")
         
-        # เตรียมข้อมูลสำหรับแสดงผล (Join กับ patients_db เพื่อเอาชื่อ)
         pt_lookup = patients_df[['hn', 'prefix', 'first_name', 'last_name']].copy()
         pt_lookup['hn'] = pt_lookup['hn'].astype(str).str.strip()
         
         daily_visits_show = daily_visits.copy()
         daily_visits_show['hn'] = daily_visits_show['hn'].astype(str).str.strip()
         
-        # Merge ข้อมูล
         merged_df = pd.merge(daily_visits_show, pt_lookup, on='hn', how='left')
         merged_df['ชื่อ-สกุล'] = merged_df['prefix'] + merged_df['first_name'] + " " + merged_df['last_name']
         
-        # เลือกคอลัมน์ที่จะแสดง
         display_df = merged_df[['hn', 'ชื่อ-สกุล', 'is_new_case', 'pefr', 'control_level', 'note']].copy()
-        
-        # จัดรูปแบบ
         display_df['is_new_case'] = display_df['is_new_case'].apply(lambda x: "🆕 New" if str(x).upper() == 'TRUE' else "")
         display_df.columns = ['HN', 'ชื่อ-สกุล', 'สถานะ', 'PEFR', 'Control', 'Note']
-        
-        # เรียงตาม HN
         display_df = display_df.sort_values(by='HN')
         
         st.dataframe(display_df, hide_index=True, use_container_width=True)
     else:
         st.info(f"ℹ️ ไม่มีรายการตรวจในวันที่ {selected_date.strftime('%d/%m/%Y')}")
+
+    # --- ✅ ส่วนที่ 6 (ใหม่): สำรองข้อมูล (Backup) ---
+    st.divider()
+    st.subheader("💾 6. สำรองข้อมูล (Backup Database)")
+    st.info("ระบบจะรวมข้อมูล 'ทะเบียนผู้ป่วย (Patients)' และ 'ประวัติการตรวจ (Visits)' ทั้งหมดเป็นไฟล์ Excel เดียว")
+
+    # ฟังก์ชันแปลง DataFrame เป็น Excel (Bytes)
+    def to_excel(df1, df2):
+        output = io.BytesIO()
+        # ใช้ XlsxWriter engine
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df1.to_excel(writer, sheet_name='Patients', index=False)
+            df2.to_excel(writer, sheet_name='Visits', index=False)
+        processed_data = output.getvalue()
+        return processed_data
+
+    # สร้างชื่อไฟล์ตามวันเวลาปัจจุบัน (เช่น asthma_backup_2024-01-20.xlsx)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    file_name = f"asthma_backup_{timestamp}.xlsx"
+
+    # เตรียมไฟล์
+    excel_data = to_excel(patients_df, visits_df)
+
+    # ปุ่ม Download
+    st.download_button(
+        label="📥 ดาวน์โหลดไฟล์ Backup (.xlsx)",
+        data=excel_data,
+        file_name=file_name,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary", # ปุ่มสีแดง/ส้มให้เด่น
+        help="คลิกเพื่อดาวน์โหลดข้อมูลทั้งหมดลงเครื่องคอมพิวเตอร์"
+    )
