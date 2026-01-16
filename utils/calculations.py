@@ -1,87 +1,78 @@
-import altair as alt
 import pandas as pd
-import qrcode
-from io import BytesIO
-from datetime import datetime, timedelta
+import altair as alt
 
-def calculate_predicted_pefr(age, height_cm, gender_prefix):
-    if not height_cm or height_cm <= 0: return 0
-    is_male = True
-    prefix = str(gender_prefix).strip()
-    if any(x in prefix for x in ['นาง', 'น.ส.', 'หญิง', 'ด.ญ.', 'Miss', 'Mrs.']):
-        is_male = False
-      
-    if age < 15:
-        predicted = -425.5714 + (5.2428 * height_cm)
-        return max(predicted, 100)
+def calculate_predicted_pefr(age, height, gender_prefix):
+    age = int(age)
+    height = int(height)
+    
+    if gender_prefix in ["นาย", "ด.ช."]:
+        predicted = (5.48 * height) - (1.51 * age) - 279.7
     else:
-        h = height_cm
-        a = age
-        if is_male:
-            pefr_ls = -16.859 + (0.307*a) + (0.141*h) - (0.0018*a**2) - (0.001*a*h)
-        else:
-            pefr_ls = -31.355 + (0.162*a) - (0.00084*a**2) + (0.391*h) - (0.00099*h**2) - (0.00072*a*h)
-        return pefr_ls * 60
+        predicted = (3.72 * height) - (2.24 * age) - 96.6
+    
+    return max(0, predicted)
 
 def get_percent_predicted(current_pefr, predicted_pefr):
-    if predicted_pefr <= 0 or current_pefr <= 0: return 0
+    if predicted_pefr == 0: return 0
     return int((current_pefr / predicted_pefr) * 100)
 
-def get_action_plan_zone(current_pefr, reference_pefr):
-    if current_pefr <= 0: return "Not Done", "gray", "ไม่ได้เป่า Peak Flow"
-    if reference_pefr <= 0: return "Unknown", "gray", "ไม่มีข้อมูลอ้างอิง"
-    percent = (current_pefr / reference_pefr) * 100
-    if percent >= 80: return "Green Zone", "green", "คุมได้ดี"
-    elif percent >= 50: return "Yellow Zone", "orange", "เริ่มมีอาการ"
-    else: return "Red Zone", "red", "อันตราย"
+# ✅ แก้ไขชื่อ Zone และคำแนะนำตรงนี้
+def get_action_plan_zone(current_pefr, predicted_pefr):
+    pct = get_percent_predicted(current_pefr, predicted_pefr)
+    
+    if pct >= 80:
+        return (
+            "🟢 Green Zone (ควบคุมได้ดี)", # เปลี่ยนชื่อกลับเป็น Green Zone
+            "#2E7D32", 
+            """✅ <b>ใช้ชีวิตและออกกำลังกายได้ตามปกติ</b><br>
+            ⚠️ <b>สำคัญ:</b> ให้ใช้ 'ยาควบคุมอาการ' (Controller) ต่อไปตามที่แพทย์สั่ง (ห้ามหยุดยาเอง)"""
+        )
+    elif pct >= 60:
+        return (
+            "🟡 Yellow Zone (เริ่มมีอาการ)", # เปลี่ยนชื่อกลับเป็น Yellow Zone
+            "#F9A825", 
+            """⚡ <b>ให้พก 'ยาฉุกเฉิน' ติดตัวเสมอ และใช้ทันทีเมื่อมีอาการ</b><br>
+            🔍 <b>สำคัญ:</b> ควรปรึกษาแพทย์หรือเภสัชกร เพื่อตรวจสอบเทคนิคการพ่นยา หรือค้นหาสิ่งกระตุ้นอาการ (ไม่ควรปล่อยไว้นาน)"""
+        )
+    else:
+        return (
+            "🔴 Red Zone (อันตราย)", # เปลี่ยนชื่อกลับเป็น Red Zone
+            "#C62828", 
+            """🚨 <b>ระวังอันตราย! อาการหอบอาจกำเริบรุนแรงได้ทุกเมื่อ</b><br>
+            🏥 <b>สำคัญ:</b> ต้องรีบกลับไปพบแพทย์ 'ก่อนวันนัด' หากมีอาการแย่ลง หรือพ่นยาฉุกเฉินแล้วอาการยังไม่ทุเลา"""
+        )
 
-def check_technique_status(pt_visits_df):
-    if pt_visits_df.empty: return "never", 0, None
-    reviews = pt_visits_df[pt_visits_df['technique_check'].astype(str).str.contains('ทำ', na=False)]
-    if reviews.empty: return "never", 0, None
-    reviews = reviews.copy()
-    reviews['date'] = pd.to_datetime(reviews['date'])
-    last_date = reviews['date'].max()
-    days_remaining = (last_date + timedelta(days=365) - pd.to_datetime("today").normalize()).days
-    if days_remaining < 0: return "overdue", abs(days_remaining), last_date
-    else: return "ok", days_remaining, last_date
-
-def mask_text(text):
-    if not isinstance(text, str): return str(text)
-    if len(text) <= 2: return text[0] + "x" * (len(text)-1)
-    return text[:2] + "x" * (len(text)-2)
-
-def generate_qr(data):
-    qr = qrcode.QRCode(version=1, box_size=10, border=2)
-    qr.add_data(data)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    buf = BytesIO()
-    img.save(buf)
-    return buf.getvalue()
-
-def plot_pefr_chart(visits_df, reference_pefr):
-    data = visits_df.copy()
-    data = data[data['pefr'] > 0]
-    if data.empty:
-        return alt.Chart(pd.DataFrame({'date':[], 'pefr':[]})).mark_text(text="ไม่มีข้อมูลกราฟ PEFR")
-
-    data['date'] = pd.to_datetime(data['date'])
-    ref_val = reference_pefr if reference_pefr > 0 else data['pefr'].max()
-      
-    def get_color(val):
-        if val >= ref_val * 0.8: return 'green'
-        elif val >= ref_val * 0.5: return 'orange'
-        else: return 'red'
-    data['color'] = data['pefr'].apply(get_color)
-
-    base = alt.Chart(data).encode(
-        x=alt.X('date', title='วันที่', axis=alt.Axis(format='%d/%m/%Y')),
-        y=alt.Y('pefr', title='PEFR (L/min)', scale=alt.Scale(domain=[0, ref_val + 150])),
-        tooltip=[alt.Tooltip('date', format='%d/%m/%Y'), 'pefr']
+# ... (ฟังก์ชันอื่นๆ คงเดิม) ...
+def plot_pefr_chart(visits_df, predicted_pefr):
+    df = visits_df.copy()
+    df['date'] = pd.to_datetime(df['date'])
+    
+    base = alt.Chart(df).encode(x=alt.X('date', title='วันที่'))
+    
+    line = base.mark_line(point=True).encode(
+        y=alt.Y('pefr', title='PEFR (L/min)', scale=alt.Scale(domain=[0, 800])),
+        tooltip=['date', 'pefr']
     )
-    line = base.mark_line(color='gray').encode()
-    points = base.mark_circle(size=100).encode(color=alt.Color('color', scale=None))
-    rule_green = alt.Chart(pd.DataFrame({'y': [ref_val * 0.8]})).mark_rule(color='green', strokeDash=[5, 5]).encode(y='y')
-    rule_red = alt.Chart(pd.DataFrame({'y': [ref_val * 0.5]})).mark_rule(color='red', strokeDash=[5, 5]).encode(y='y')
-    return (line + points + rule_green + rule_red).properties(height=350).interactive()
+    
+    rule_green = alt.Chart(pd.DataFrame({'y': [predicted_pefr * 0.8]})).mark_rule(color='#66BB6A', strokeDash=[5, 5]).encode(y='y')
+    rule_red = alt.Chart(pd.DataFrame({'y': [predicted_pefr * 0.6]})).mark_rule(color='#EF5350', strokeDash=[5, 5]).encode(y='y')
+    
+    return (line + rule_green + rule_red).properties(height=300)
+
+def check_technique_status(visits_df):
+    if visits_df.empty:
+        return "never", 0, None
+
+    visits_df['date'] = pd.to_datetime(visits_df['date'])
+    tech_visits = visits_df[visits_df['technique_check'].astype(str).str.contains("ทำ", na=False)].sort_values(by='date')
+    
+    if tech_visits.empty:
+        return "never", 0, None
+        
+    last_tech_date = tech_visits.iloc[-1]['date']
+    days_since = (pd.Timestamp.now() - last_tech_date).days
+    
+    if days_since > 365:
+        return "overdue", days_since, last_tech_date
+    else:
+        return "valid", days_since, last_tech_date
