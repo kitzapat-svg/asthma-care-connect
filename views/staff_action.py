@@ -162,6 +162,78 @@ def render_search_patient(patients_db, visits_db, base_url):
 
         st.divider()
         st.subheader("📝 บันทึก Visit")
+        
+        # =================================================================
+        # 🟢 ส่วนประเมินเทคนิคพ่นยา (อยู่นอก Form เพื่อให้ Interactive)
+        # =================================================================
+        inhaler_summary_text = "-" # ค่าเริ่มต้น
+        tech_check_status = "ไม่"  # ค่าเริ่มต้น
+
+        with st.container(border=True):
+            st.markdown("##### 🎯 การประเมินเทคนิคพ่นยา (Optional)")
+            
+            # ใช้ key เพื่อให้ Session State จำสถานะการติ๊กได้
+            is_teach_and_assess = st.checkbox("✅ ต้องการสอน/ประเมินเทคนิคพ่นยาในครั้งนี้", key="assess_toggle")
+
+            if is_teach_and_assess:
+                tech_check_status = "ทำ" # ถ้าติ๊ก checkbox นี้ ให้ถือว่าสอนแล้ว
+                
+                st.info("📝 **แบบประเมินเทคนิค MDI (Inhaler Device Technique)**")
+                steps = [
+                    "(1) เขย่าหลอดพ่นยาในแนวตั้ง 3-4 ครั้ง",
+                    "(2) ถือหลอดพ่นยาในแนวตั้ง",
+                    "(3) หายใจออกทางปากให้สุดเต็มที่",
+                    "(4) ตั้งศีรษะให้ตรง",
+                    "(5) ใช้ริมฝีปากอมปากหลอดพ่นยาให้สนิท",
+                    "(6) หายใจเข้าทางปากช้าๆ ลึกๆ พร้อมกดที่พ่นยา 1 ครั้ง",
+                    "(7) กลั้นลมหายใจประมาณ 10 วินาที",
+                    "(8) ผ่อนลมหายใจออกทางปากหรือจมูกช้าๆ"
+                ]
+                
+                checks = []
+                # ใช้คอลัมน์เพื่อจัดเรียงให้สวยงาม
+                cols_check = st.columns(2)
+                for i, step in enumerate(steps):
+                    with cols_check[i % 2]:
+                        # ใช้ key unique เพื่อไม่ให้ error
+                        checks.append(st.checkbox(step, value=True, key=f"step_{i}"))
+
+                score = sum(checks)
+                
+                # Critical Fail Logic
+                critical_fail = []
+                if not checks[4]: critical_fail.append("ข้อ 5 (อมไม่สนิท)")
+                if not checks[5]: critical_fail.append("ข้อ 6 (กดพร้อมสูด)")
+                if not checks[6]: critical_fail.append("ข้อ 7 (กลั้นหายใจ)")
+
+                inhaler_status = ""
+                if critical_fail:
+                    st.error(f"🚨 **Critical Fail:** {', '.join(critical_fail)}")
+                    st.toast("⚠️ กรุณาสอนเทคนิคใหม่ทันที!", icon="📢")
+                    inhaler_status = "Fail (Critical)"
+                elif score == 8:
+                    st.success("✅ เทคนิคถูกต้องสมบูรณ์ (Perfect)")
+                    inhaler_status = "Pass"
+                else:
+                    st.warning(f"⚠️ ยังไม่สมบูรณ์ (ขาด {8-score} ข้อ)")
+                    inhaler_status = "Needs Improvement"
+                
+                st.markdown("---")
+                st.write("**คำแนะนำเพิ่มเติม:**")
+                c_adv1, c_adv2 = st.columns(2)
+                adv_rinse = c_adv1.checkbox("แนะนำบ้วนปาก", key="adv_rinse")
+                adv_clean = c_adv2.checkbox("แนะนำล้างอุปกรณ์", key="adv_clean")
+
+                # สร้าง String สรุปผล (เตรียมส่งเข้า Form)
+                failed_indices = [i+1 for i, x in enumerate(checks) if not x]
+                fail_str = ",".join(map(str, failed_indices)) if failed_indices else "None"
+                inhaler_summary_text = f"Score: {score}/8 ({inhaler_status}) | Fail: {fail_str}"
+                if adv_rinse: inhaler_summary_text += " | Adv:Rinse"
+                if adv_clean: inhaler_summary_text += " | Adv:Clean"
+
+        # =================================================================
+        # 🟡 ส่วนฟอร์มบันทึกข้อมูลหลัก
+        # =================================================================
         with st.form("new_visit", clear_on_submit=True):
             col_a, col_b = st.columns(2)
             v_date = col_a.date_input("วันที่", value=datetime.today())
@@ -183,68 +255,8 @@ def render_search_patient(patients_db, visits_db, base_url):
             v_adh = c_adh.slider("ความร่วมมือ (%)", 0, 100, 100)
             v_relative_pickup = c_adh.checkbox("ญาติรับยาแทน")
             
-            # --- ✅ TEACH & ASSESS TOGGLE (Integrated) ---
-            with c_chk:
-                st.write("") # ดันบรรทัดลงมา
-                # ปุ่มเดียว "สอน/ประเมิน"
-                is_teach_and_assess = st.checkbox("✅ สอน/ประเมินเทคนิคพ่นยา")
+            # (ไม่ต้องมี Checkbox สอนเทคนิคตรงนี้แล้ว เพราะย้ายไปข้างบน)
 
-            inhaler_summary_text = "-"
-            
-            # ถ้าติ๊ก -> กาง Checklist ทันที
-            if is_teach_and_assess:
-                with st.container(border=True):
-                    st.info("📝 **แบบประเมินเทคนิค MDI (Inhaler Device Technique)**")
-                    
-                    steps = [
-                        "(1) เขย่าหลอดพ่นยาในแนวตั้ง 3-4 ครั้ง",
-                        "(2) ถือหลอดพ่นยาในแนวตั้ง",
-                        "(3) หายใจออกทางปากให้สุดเต็มที่",
-                        "(4) ตั้งศีรษะให้ตรง",
-                        "(5) ใช้ริมฝีปากอมปากหลอดพ่นยาให้สนิท",
-                        "(6) หายใจเข้าทางปากช้าๆ ลึกๆ พร้อมกดที่พ่นยา 1 ครั้ง",
-                        "(7) กลั้นลมหายใจประมาณ 10 วินาที",
-                        "(8) ผ่อนลมหายใจออกทางปากหรือจมูกช้าๆ"
-                    ]
-                    
-                    checks = []
-                    for step in steps:
-                        checks.append(st.checkbox(step, value=True))
-
-                    score = sum(checks)
-                    
-                    # Critical Fail Logic
-                    critical_fail = []
-                    if not checks[4]: critical_fail.append("ข้อ 5 (อมไม่สนิท)")
-                    if not checks[5]: critical_fail.append("ข้อ 6 (กดพร้อมสูด)")
-                    if not checks[6]: critical_fail.append("ข้อ 7 (กลั้นหายใจ)")
-
-                    inhaler_status = ""
-                    if critical_fail:
-                        st.error(f"🚨 **Critical Fail:** {', '.join(critical_fail)}")
-                        st.caption("⚠️ คำแนะนำ: กรุณาสอนซ้ำและให้คนไข้ลองทำใหม่ทันที")
-                        inhaler_status = "Fail (Critical)"
-                    elif score == 8:
-                        st.success("✅ เทคนิคถูกต้องสมบูรณ์ (Perfect)")
-                        inhaler_status = "Pass"
-                    else:
-                        st.warning(f"⚠️ ยังไม่สมบูรณ์ (ขาด {8-score} ข้อ)")
-                        inhaler_status = "Needs Improvement"
-
-                    st.markdown("---")
-                    st.write("**คำแนะนำเพิ่มเติม:**")
-                    c_adv1, c_adv2 = st.columns(2)
-                    adv_rinse = c_adv1.checkbox("แนะนำบ้วนปากหลังพ่น")
-                    adv_clean = c_adv2.checkbox("แนะนำล้างทำความสะอาด")
-                    
-                    # Summary String
-                    failed_indices = [i+1 for i, x in enumerate(checks) if not x]
-                    fail_str = ",".join(map(str, failed_indices)) if failed_indices else "None"
-                    inhaler_summary_text = f"Score: {score}/8 ({inhaler_status}) | Fail: {fail_str}"
-                    if adv_rinse: inhaler_summary_text += " | Adv:Rinse"
-                    if adv_clean: inhaler_summary_text += " | Adv:Clean"
-            # -------------------------------------------------------------
-            
             v_drp = st.text_area("DRP")
             v_adv = st.text_area("Advice")
             v_note = st.text_input("หมายเหตุ")
@@ -255,9 +267,7 @@ def render_search_patient(patients_db, visits_db, base_url):
                 actual_adherence = 0 if v_relative_pickup else v_adh
                 final_note = f"[ญาติรับแทน] {v_note}" if v_relative_pickup else v_note
                 
-                # Logic: ถ้าติ๊ก "สอน/ประเมิน" -> technique_check = "ทำ"
-                final_tech_check = "ทำ" if is_teach_and_assess else "ไม่"
-
+                # ✅ รับค่าจากตัวแปรด้านบนมาใช้บันทึก
                 new_data = {
                     "hn": selected_hn, "date": str(v_date), "pefr": actual_pefr,
                     "control_level": v_control, 
@@ -265,12 +275,16 @@ def render_search_patient(patients_db, visits_db, base_url):
                     "reliever": ", ".join(v_rel), 
                     "adherence": actual_adherence,
                     "drp": v_drp, "advice": v_adv, 
-                    "technique_check": final_tech_check,
+                    "technique_check": tech_check_status, # ค่า "ทำ/ไม่" จากด้านบน
                     "next_appt": str(v_next), "note": final_note, 
                     "is_new_case": "TRUE" if v_is_new else "FALSE",
-                    "inhaler_eval": inhaler_summary_text
+                    "inhaler_eval": inhaler_summary_text # ค่าคะแนนจากด้านบน
                 }
                 save_visit_data(new_data)
+                
+                # Reset Checkbox นอกฟอร์มให้หายไปเมื่อบันทึกเสร็จ
+                st.session_state['assess_toggle'] = False 
+                
                 st.success("บันทึกสำเร็จ")
                 st.rerun()
 
