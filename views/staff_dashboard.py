@@ -10,7 +10,6 @@ def render_dashboard(visits_df, patients_df):
         return
 
     # --- 0. เตรียมข้อมูลหลัก (Data Preparation) ---
-    # Merge ข้อมูล Visit กับ ชื่อคนไข้ ไว้ก่อนเลย เพื่อใช้แสดงในตารางรายละเอียด
     df = pd.merge(
         visits_df, 
         patients_df[['hn', 'prefix', 'first_name', 'last_name']], 
@@ -48,7 +47,7 @@ def render_dashboard(visits_df, patients_df):
     # ==============================================================================
     st.subheader("📈 1. ปริมาณงานรายเดือน (Monthly Workload)")
     
-    # 2.1 กราฟแนวโน้ม (Trend Chart) - คงเดิม
+    # 2.1 กราฟแนวโน้ม
     monthly_visits = df.groupby('month_year').size().reset_index(name='Total Visits')
     
     if 'is_new_case' in df.columns:
@@ -69,33 +68,35 @@ def render_dashboard(visits_df, patients_df):
     ).properties(height=350).interactive()
     st.altair_chart(workload_chart, use_container_width=True)
 
-    # 2.2 ตารางรายละเอียดรายเดือน (ย้อนหลัง 1 ปี) - ✅ เพิ่มใหม่ตามขอ
-    st.markdown("##### 📂 รายละเอียดรายเดือน (ย้อนหลัง 1 ปี)")
-    
+    # 2.2 ตารางสรุปรายเดือน (ปรับใหม่: รวมเป็นตารางเดียว ไม่มีชื่อคนไข้)
     one_year_ago = datetime.now() - timedelta(days=365)
-    # กรองข้อมูล 1 ปี และเรียงลำดับจากเดือนล่าสุดไปหาอดีต
     df_1y = df[df['date'] >= one_year_ago].copy()
-    unique_months = sorted(df_1y['month_year'].unique(), reverse=True)
-
-    for m in unique_months:
-        month_data = df_1y[df_1y['month_year'] == m].sort_values(by='date', ascending=False)
-        count_m = len(month_data)
-        count_new_m = len(month_data[month_data['is_new_case'].astype(str).str.upper() == 'TRUE'])
+    
+    if not df_1y.empty:
+        # Group ข้อมูลเพื่อสร้างตารางสรุป
+        monthly_summary = df_1y.groupby('month_year').agg(
+            total_visits=('hn', 'count'),
+            new_cases=('is_new_case', lambda x: (x.astype(str).str.upper() == 'TRUE').sum())
+        ).reset_index()
         
-        # แปลงเดือนปีเป็นรูปแบบที่อ่านง่าย (เช่น 2025-10)
-        month_label = pd.to_datetime(m + '-01').strftime('%B %Y')
+        # เรียงจากเดือนล่าสุด
+        monthly_summary = monthly_summary.sort_values('month_year', ascending=False)
+        
+        # จัดรูปแบบวันที่ให้สวยงาม
+        monthly_summary['Month Name'] = pd.to_datetime(monthly_summary['month_year'] + '-01').dt.strftime('%B %Y')
+        
+        # เลือกคอลัมน์ที่จะแสดง
+        display_monthly = monthly_summary[['Month Name', 'total_visits', 'new_cases']]
+        display_monthly.columns = ['เดือน', 'จำนวนผู้ป่วยทั้งหมด (ราย)', 'ผู้ป่วยใหม่ (ราย)']
 
-        # สร้าง Expander (ย่อ-ขยาย)
-        with st.expander(f"🗓️ {month_label} (ทั้งหมด: {count_m} | ใหม่: {count_new_m})"):
+        # แสดงผลใน Expander เดียว
+        with st.expander("📂 ดูตารางสรุปยอดรายเดือน (คลิก)", expanded=False):
             st.dataframe(
-                month_data[['date', 'hn', 'full_name', 'pefr', 'control_level', 'is_new_case']],
+                display_monthly,
                 column_config={
-                    "date": st.column_config.DateColumn("วันที่", format="DD/MM/YYYY"),
-                    "hn": "HN",
-                    "full_name": "ชื่อ-สกุล",
-                    "pefr": "PEFR",
-                    "control_level": "สถานะ",
-                    "is_new_case": "New Case"
+                    "เดือน": st.column_config.TextColumn("เดือน"),
+                    "จำนวนผู้ป่วยทั้งหมด (ราย)": st.column_config.NumberColumn("ยอดรวม (คน)", format="%d"),
+                    "ผู้ป่วยใหม่ (ราย)": st.column_config.NumberColumn("รายใหม่ (คน)", format="%d"),
                 },
                 hide_index=True,
                 use_container_width=True
@@ -104,16 +105,16 @@ def render_dashboard(visits_df, patients_df):
     st.divider()
 
     # ==============================================================================
-    # 🗓️ ส่วนที่ 3 (เพิ่มใหม่): ปริมาณงานรายสัปดาห์ (Weekly Workload) - 3 เดือน
+    # 🗓️ ส่วนที่ 3: ปริมาณงานรายสัปดาห์ (Weekly Workload) - 4 สัปดาห์ย้อนหลัง
     # ==============================================================================
-    st.subheader("📊 2. ปริมาณงานรายสัปดาห์ (Weekly Workload - Last 3 Months)")
+    st.subheader("📊 2. ปริมาณงานรายสัปดาห์ (4 Weeks Lookback)")
     
-    # 3.1 เตรียมข้อมูล 3 เดือนย้อนหลัง
-    three_months_ago = datetime.now() - timedelta(days=90)
-    df_weekly = df[df['date'] >= three_months_ago].copy()
+    # 3.1 เตรียมข้อมูล 4 สัปดาห์ย้อนหลัง (28 วัน)
+    four_weeks_ago = datetime.now() - timedelta(weeks=4)
+    df_weekly = df[df['date'] >= four_weeks_ago].copy()
     
     if not df_weekly.empty:
-        # หาวันจันทร์ของแต่ละสัปดาห์เพื่อใช้ Group
+        # หาวันจันทร์ของแต่ละสัปดาห์
         df_weekly['week_start'] = df_weekly['date'].dt.to_period('W').apply(lambda r: r.start_time)
         
         # Group ข้อมูล
@@ -122,14 +123,13 @@ def render_dashboard(visits_df, patients_df):
             new_patients=('is_new_case', lambda x: (x.astype(str).str.upper() == 'TRUE').sum())
         ).reset_index()
         
-        # แปลงข้อมูลสำหรับกราฟ (Melt)
         weekly_melted = weekly_stats.melt('week_start', var_name='type', value_name='count')
         weekly_melted['type'] = weekly_melted['type'].replace({
             'total_visits': 'คนไข้ทั้งหมด', 
             'new_patients': 'คนไข้ใหม่'
         })
 
-        # 3.2 วาดกราฟแท่งรายสัปดาห์
+        # 3.2 กราฟแท่งรายสัปดาห์
         chart_weekly = alt.Chart(weekly_melted).mark_bar().encode(
             x=alt.X('week_start', title='สัปดาห์ (เริ่มวันจันทร์)', axis=alt.Axis(format='%d/%m')),
             y=alt.Y('count', title='จำนวนคนไข้'),
@@ -143,19 +143,16 @@ def render_dashboard(visits_df, patients_df):
 
         st.altair_chart(chart_weekly, use_container_width=True)
 
-        # 3.3 ตารางรายละเอียดรายสัปดาห์ (ย่อ-ขยาย)
-        st.markdown("##### 📂 รายละเอียดรายสัปดาห์")
+        # 3.3 ตารางรายสัปดาห์ (ย้อนหลัง 4 สัปดาห์)
+        st.markdown("##### 📂 รายละเอียดรายสัปดาห์ (4 Weeks)")
         unique_weeks = sorted(df_weekly['week_start'].unique(), reverse=True)
         
         for w in unique_weeks:
-            # กรองข้อมูลเฉพาะสัปดาห์นั้น
             week_mask = df_weekly['week_start'] == w
             week_data = df_weekly[week_mask].sort_values(by='date', ascending=False)
             
             w_total = len(week_data)
             w_new = len(week_data[week_data['is_new_case'].astype(str).str.upper() == 'TRUE'])
-            
-            # Format วันที่เริ่มสัปดาห์
             week_label = w.strftime('%d/%m/%Y')
             
             with st.expander(f"Week {week_label} (รวม: {w_total} | ใหม่: {w_new})"):
@@ -173,11 +170,11 @@ def render_dashboard(visits_df, patients_df):
                     use_container_width=True
                 )
     else:
-        st.info("ไม่มีข้อมูลในช่วง 3 เดือนที่ผ่านมา")
+        st.info("ไม่มีข้อมูลในช่วง 4 สัปดาห์ที่ผ่านมา")
 
     st.divider()
 
-    # --- ส่วนที่ 4: KPI ย่อย (เดิมคือส่วนที่ 2) ---
+    # --- ส่วนที่ 4: KPI ย่อย ---
     c_left, c_right = st.columns([1, 1.2])
     
     with c_left:
@@ -224,7 +221,7 @@ def render_dashboard(visits_df, patients_df):
         else:
             st.info("ยังไม่มีข้อมูลการสอนพ่นยา")
 
-    # --- ส่วนที่ 5: สถิติ DRP (เดิมคือส่วนที่ 3) ---
+    # --- ส่วนที่ 5: สถิติ DRP ---
     st.divider()
     st.subheader("💊 5. สถิติปัญหาจากการใช้ยา (DRP Summary)")
     df_drp = df.copy()
@@ -250,7 +247,7 @@ def render_dashboard(visits_df, patients_df):
     else:
         st.success("ยังไม่พบรายงานปัญหาการใช้ยา (DRP) ในระบบ")
 
-    # --- ส่วนที่ 6: รายชื่อผู้รับบริการรายวัน (เดิมคือส่วนที่ 4) ---
+    # --- ส่วนที่ 6: รายชื่อผู้รับบริการรายวัน ---
     st.divider()
     st.subheader("🗓️ 6. ตรวจสอบรายชื่อผู้รับบริการ (Daily Log)")
     
@@ -280,7 +277,7 @@ def render_dashboard(visits_df, patients_df):
     else:
         st.info(f"ℹ️ ไม่มีรายการตรวจในวันที่ {selected_date.strftime('%d/%m/%Y')}")
 
-    # --- ส่วนที่ 7: สำรองข้อมูล (Backup) ---
+    # --- ส่วนที่ 7: สำรองข้อมูล ---
     st.divider()
     st.subheader("💾 7. สำรองข้อมูล (Backup Database)")
     st.info("ระบบจะรวมข้อมูล 'ทะเบียนผู้ป่วย (Patients)' และ 'ประวัติการตรวจ (Visits)' ทั้งหมดเป็นไฟล์ Excel เดียว")
