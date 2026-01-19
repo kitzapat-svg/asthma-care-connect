@@ -24,7 +24,10 @@ def render_dashboard(visits_df, patients_df):
     df['month_year'] = df['date'].dt.strftime('%Y-%m') 
     df['full_name'] = df['prefix'].fillna('') + df['first_name'].fillna('') + " " + df['last_name'].fillna('')
     
-    # ==============================================================================
+    #✅ FIX TIMEZONE: ปรับเวลา Server (UTC) เป็นไทย (UTC+7)
+    thai_now = datetime.now() + timedelta(hours=7)
+    today_date = thai_now.date()
+    today_str_iso = today_date.strftime('%Y-%m-%d') # สำหรับเทียบกับ DataFrame ==============================================================================
     # 🔔 ส่วนใหม่: แจ้งเตือนนัดหมายวันนี้ (Today's Appointments & DRP Alert)
     # ==============================================================================
     today_date = datetime.now().date()
