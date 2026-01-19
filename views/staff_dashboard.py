@@ -68,28 +68,21 @@ def render_dashboard(visits_df, patients_df):
     ).properties(height=350).interactive()
     st.altair_chart(workload_chart, use_container_width=True)
 
-    # 2.2 ตารางสรุปรายเดือน (ปรับใหม่: รวมเป็นตารางเดียว ไม่มีชื่อคนไข้)
+    # 2.2 ตารางสรุปรายเดือน
     one_year_ago = datetime.now() - timedelta(days=365)
     df_1y = df[df['date'] >= one_year_ago].copy()
     
     if not df_1y.empty:
-        # Group ข้อมูลเพื่อสร้างตารางสรุป
         monthly_summary = df_1y.groupby('month_year').agg(
             total_visits=('hn', 'count'),
             new_cases=('is_new_case', lambda x: (x.astype(str).str.upper() == 'TRUE').sum())
         ).reset_index()
         
-        # เรียงจากเดือนล่าสุด
         monthly_summary = monthly_summary.sort_values('month_year', ascending=False)
-        
-        # จัดรูปแบบวันที่ให้สวยงาม
         monthly_summary['Month Name'] = pd.to_datetime(monthly_summary['month_year'] + '-01').dt.strftime('%B %Y')
-        
-        # เลือกคอลัมน์ที่จะแสดง
         display_monthly = monthly_summary[['Month Name', 'total_visits', 'new_cases']]
         display_monthly.columns = ['เดือน', 'จำนวนผู้ป่วยทั้งหมด (ราย)', 'ผู้ป่วยใหม่ (ราย)']
 
-        # แสดงผลใน Expander เดียว
         with st.expander("📂 ดูตารางสรุปยอดรายเดือน (คลิก)", expanded=False):
             st.dataframe(
                 display_monthly,
@@ -105,46 +98,41 @@ def render_dashboard(visits_df, patients_df):
     st.divider()
 
     # ==============================================================================
-    # 🗓️ ส่วนที่ 3: ปริมาณงานรายสัปดาห์ (Weekly Workload) - 4 สัปดาห์ย้อนหลัง
+    # 📊 ส่วนที่ 3: ปริมาณงานรายสัปดาห์ (Weekly Workload) - 4 สัปดาห์ย้อนหลัง
     # ==============================================================================
     st.subheader("📊 2. ปริมาณงานรายสัปดาห์ (4 Weeks Lookback)")
     
-    # 3.1 เตรียมข้อมูล 4 สัปดาห์ย้อนหลัง (28 วัน)
-    four_weeks_ago = datetime.now() - timedelta(weeks=4)
+    # 3.1 เตรียมข้อมูล 4 สัปดาห์ย้อนหลัง
+    weeks_to_look_back = 4
+    four_weeks_ago = datetime.now() - timedelta(weeks=weeks_to_look_back)
     df_weekly = df[df['date'] >= four_weeks_ago].copy()
     
     if not df_weekly.empty:
         # หาวันจันทร์ของแต่ละสัปดาห์
         df_weekly['week_start'] = df_weekly['date'].dt.to_period('W').apply(lambda r: r.start_time)
         
-        # Group ข้อมูล
-        weekly_stats = df_weekly.groupby('week_start').agg(
-            total_visits=('hn', 'count'),
-            new_patients=('is_new_case', lambda x: (x.astype(str).str.upper() == 'TRUE').sum())
-        ).reset_index()
+        # --- ✅ เปลี่ยนจากกราฟ เป็น Metric ค่าเฉลี่ย ---
+        total_visits_period = len(df_weekly)
+        total_new_period = len(df_weekly[df_weekly['is_new_case'].astype(str).str.upper() == 'TRUE'])
         
-        weekly_melted = weekly_stats.melt('week_start', var_name='type', value_name='count')
-        weekly_melted['type'] = weekly_melted['type'].replace({
-            'total_visits': 'คนไข้ทั้งหมด', 
-            'new_patients': 'คนไข้ใหม่'
-        })
+        # คำนวณเฉลี่ย (หารด้วยจำนวนสัปดาห์)
+        avg_visits_per_week = total_visits_period / weeks_to_look_back
+        avg_new_per_week = total_new_period / weeks_to_look_back
+        
+        c_avg1, c_avg2 = st.columns(2)
+        c_avg1.metric(
+            label=f"เฉลี่ยผู้ป่วย (ย้อนหลัง {weeks_to_look_back} สัปดาห์)", 
+            value=f"{avg_visits_per_week:.1f} คน/สัปดาห์"
+        )
+        c_avg2.metric(
+            label="เฉลี่ยผู้ป่วยใหม่", 
+            value=f"{avg_new_per_week:.1f} คน/สัปดาห์"
+        )
+        
+        st.write("") # เว้นบรรทัดนิดนึง
 
-        # 3.2 กราฟแท่งรายสัปดาห์
-        chart_weekly = alt.Chart(weekly_melted).mark_bar().encode(
-            x=alt.X('week_start', title='สัปดาห์ (เริ่มวันจันทร์)', axis=alt.Axis(format='%d/%m')),
-            y=alt.Y('count', title='จำนวนคนไข้'),
-            color=alt.Color('type', title='ประเภท', scale=alt.Scale(domain=['คนไข้ทั้งหมด', 'คนไข้ใหม่'], range=['#4285F4', '#EA4335'])),
-            tooltip=[
-                alt.Tooltip('week_start', title='สัปดาห์', format='%d/%m/%Y'),
-                alt.Tooltip('type', title='ประเภท'),
-                alt.Tooltip('count', title='จำนวน')
-            ]
-        ).properties(height=300).interactive()
-
-        st.altair_chart(chart_weekly, use_container_width=True)
-
-        # 3.3 ตารางรายสัปดาห์ (ย้อนหลัง 4 สัปดาห์)
-        st.markdown("##### 📂 รายละเอียดรายสัปดาห์ (4 Weeks)")
+        # 3.2 ตารางรายสัปดาห์ (4 สัปดาห์)
+        st.markdown("##### 📂 รายละเอียดรายสัปดาห์")
         unique_weeks = sorted(df_weekly['week_start'].unique(), reverse=True)
         
         for w in unique_weeks:
