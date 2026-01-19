@@ -1,19 +1,27 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
-from datetime import datetime
-import io # ✅ เพิ่ม import io สำหรับจัดการไฟล์ในหน่วยความจำ
+from datetime import datetime, timedelta
+import io
 
 def render_dashboard(visits_df, patients_df):
     if visits_df.empty:
         st.warning("ยังไม่มีข้อมูลการตรวจเยี่ยม")
         return
 
-    # เตรียมข้อมูลหลัก
-    df = visits_df.copy()
+    # --- 0. เตรียมข้อมูลหลัก (Data Preparation) ---
+    # Merge ข้อมูล Visit กับ ชื่อคนไข้ ไว้ก่อนเลย เพื่อใช้แสดงในตารางรายละเอียด
+    df = pd.merge(
+        visits_df, 
+        patients_df[['hn', 'prefix', 'first_name', 'last_name']], 
+        on='hn', 
+        how='left'
+    )
+    
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    df['month_year'] = df['date'].dt.strftime('%Y-%m') 
-
+    df['month_year'] = df['date'].dt.strftime('%Y-%m') # สำหรับรายเดือน
+    df['full_name'] = df['prefix'].fillna('') + df['first_name'].fillna('') + " " + df['last_name'].fillna('')
+    
     # --- ส่วนที่ 1: สรุปยอดประจำวัน ---
     today_str = datetime.now().strftime('%Y-%m-%d')
     today_df = df[df['date'].dt.strftime('%Y-%m-%d') == today_str]
@@ -35,8 +43,12 @@ def render_dashboard(visits_df, patients_df):
     m3.metric("ทะเบียนผู้ป่วยสะสม", f"{total_patients} คน")
     st.divider()
 
-    # --- ส่วนที่ 2: ปริมาณงานรายเดือน ---
+    # ==============================================================================
+    # 📈 ส่วนที่ 2: ปริมาณงานรายเดือน (Monthly Workload)
+    # ==============================================================================
     st.subheader("📈 1. ปริมาณงานรายเดือน (Monthly Workload)")
+    
+    # 2.1 กราฟแนวโน้ม (Trend Chart) - คงเดิม
     monthly_visits = df.groupby('month_year').size().reset_index(name='Total Visits')
     
     if 'is_new_case' in df.columns:
@@ -56,13 +68,120 @@ def render_dashboard(visits_df, patients_df):
         tooltip=['month_year', 'Type', 'Count']
     ).properties(height=350).interactive()
     st.altair_chart(workload_chart, use_container_width=True)
+
+    # 2.2 ตารางรายละเอียดรายเดือน (ย้อนหลัง 1 ปี) - ✅ เพิ่มใหม่ตามขอ
+    st.markdown("##### 📂 รายละเอียดรายเดือน (ย้อนหลัง 1 ปี)")
+    
+    one_year_ago = datetime.now() - timedelta(days=365)
+    # กรองข้อมูล 1 ปี และเรียงลำดับจากเดือนล่าสุดไปหาอดีต
+    df_1y = df[df['date'] >= one_year_ago].copy()
+    unique_months = sorted(df_1y['month_year'].unique(), reverse=True)
+
+    for m in unique_months:
+        month_data = df_1y[df_1y['month_year'] == m].sort_values(by='date', ascending=False)
+        count_m = len(month_data)
+        count_new_m = len(month_data[month_data['is_new_case'].astype(str).str.upper() == 'TRUE'])
+        
+        # แปลงเดือนปีเป็นรูปแบบที่อ่านง่าย (เช่น 2025-10)
+        month_label = pd.to_datetime(m + '-01').strftime('%B %Y')
+
+        # สร้าง Expander (ย่อ-ขยาย)
+        with st.expander(f"🗓️ {month_label} (ทั้งหมด: {count_m} | ใหม่: {count_new_m})"):
+            st.dataframe(
+                month_data[['date', 'hn', 'full_name', 'pefr', 'control_level', 'is_new_case']],
+                column_config={
+                    "date": st.column_config.DateColumn("วันที่", format="DD/MM/YYYY"),
+                    "hn": "HN",
+                    "full_name": "ชื่อ-สกุล",
+                    "pefr": "PEFR",
+                    "control_level": "สถานะ",
+                    "is_new_case": "New Case"
+                },
+                hide_index=True,
+                use_container_width=True
+            )
+
     st.divider()
 
-    # --- ส่วนที่ 3: KPI ย่อย ---
+    # ==============================================================================
+    # 🗓️ ส่วนที่ 3 (เพิ่มใหม่): ปริมาณงานรายสัปดาห์ (Weekly Workload) - 3 เดือน
+    # ==============================================================================
+    st.subheader("📊 2. ปริมาณงานรายสัปดาห์ (Weekly Workload - Last 3 Months)")
+    
+    # 3.1 เตรียมข้อมูล 3 เดือนย้อนหลัง
+    three_months_ago = datetime.now() - timedelta(days=90)
+    df_weekly = df[df['date'] >= three_months_ago].copy()
+    
+    if not df_weekly.empty:
+        # หาวันจันทร์ของแต่ละสัปดาห์เพื่อใช้ Group
+        df_weekly['week_start'] = df_weekly['date'].dt.to_period('W').apply(lambda r: r.start_time)
+        
+        # Group ข้อมูล
+        weekly_stats = df_weekly.groupby('week_start').agg(
+            total_visits=('hn', 'count'),
+            new_patients=('is_new_case', lambda x: (x.astype(str).str.upper() == 'TRUE').sum())
+        ).reset_index()
+        
+        # แปลงข้อมูลสำหรับกราฟ (Melt)
+        weekly_melted = weekly_stats.melt('week_start', var_name='type', value_name='count')
+        weekly_melted['type'] = weekly_melted['type'].replace({
+            'total_visits': 'คนไข้ทั้งหมด', 
+            'new_patients': 'คนไข้ใหม่'
+        })
+
+        # 3.2 วาดกราฟแท่งรายสัปดาห์
+        chart_weekly = alt.Chart(weekly_melted).mark_bar().encode(
+            x=alt.X('week_start', title='สัปดาห์ (เริ่มวันจันทร์)', axis=alt.Axis(format='%d/%m')),
+            y=alt.Y('count', title='จำนวนคนไข้'),
+            color=alt.Color('type', title='ประเภท', scale=alt.Scale(domain=['คนไข้ทั้งหมด', 'คนไข้ใหม่'], range=['#4285F4', '#EA4335'])),
+            tooltip=[
+                alt.Tooltip('week_start', title='สัปดาห์', format='%d/%m/%Y'),
+                alt.Tooltip('type', title='ประเภท'),
+                alt.Tooltip('count', title='จำนวน')
+            ]
+        ).properties(height=300).interactive()
+
+        st.altair_chart(chart_weekly, use_container_width=True)
+
+        # 3.3 ตารางรายละเอียดรายสัปดาห์ (ย่อ-ขยาย)
+        st.markdown("##### 📂 รายละเอียดรายสัปดาห์")
+        unique_weeks = sorted(df_weekly['week_start'].unique(), reverse=True)
+        
+        for w in unique_weeks:
+            # กรองข้อมูลเฉพาะสัปดาห์นั้น
+            week_mask = df_weekly['week_start'] == w
+            week_data = df_weekly[week_mask].sort_values(by='date', ascending=False)
+            
+            w_total = len(week_data)
+            w_new = len(week_data[week_data['is_new_case'].astype(str).str.upper() == 'TRUE'])
+            
+            # Format วันที่เริ่มสัปดาห์
+            week_label = w.strftime('%d/%m/%Y')
+            
+            with st.expander(f"Week {week_label} (รวม: {w_total} | ใหม่: {w_new})"):
+                 st.dataframe(
+                    week_data[['date', 'hn', 'full_name', 'pefr', 'control_level', 'note']],
+                    column_config={
+                        "date": st.column_config.DateColumn("วันที่", format="DD/MM/YYYY"),
+                        "hn": "HN",
+                        "full_name": "ชื่อ-สกุล",
+                        "pefr": "PEFR",
+                        "control_level": "สถานะ",
+                        "note": "Note"
+                    },
+                    hide_index=True,
+                    use_container_width=True
+                )
+    else:
+        st.info("ไม่มีข้อมูลในช่วง 3 เดือนที่ผ่านมา")
+
+    st.divider()
+
+    # --- ส่วนที่ 4: KPI ย่อย (เดิมคือส่วนที่ 2) ---
     c_left, c_right = st.columns([1, 1.2])
     
     with c_left:
-        st.subheader("2. การควบคุมโรค (Status)")
+        st.subheader("3. การควบคุมโรค (Status)")
         latest_visits = df.sort_values('date').groupby('hn').tail(1)
         control_counts = latest_visits['control_level'].value_counts().reset_index()
         control_counts.columns = ['status', 'count']
@@ -78,7 +197,7 @@ def render_dashboard(visits_df, patients_df):
         st.altair_chart(pie, use_container_width=True)
 
     with c_right:
-        st.subheader("3. สอนเทคนิคพ่นยา (Fiscal Year)")
+        st.subheader("4. สอนเทคนิคพ่นยา (Fiscal Year)")
         df_tech = df[df['technique_check'].astype(str).str.contains('ทำ', na=False)].copy()
 
         if not df_tech.empty:
@@ -105,9 +224,9 @@ def render_dashboard(visits_df, patients_df):
         else:
             st.info("ยังไม่มีข้อมูลการสอนพ่นยา")
 
-    # --- ส่วนที่ 4: สถิติ DRP ---
+    # --- ส่วนที่ 5: สถิติ DRP (เดิมคือส่วนที่ 3) ---
     st.divider()
-    st.subheader("💊 4. สถิติปัญหาจากการใช้ยา (DRP Summary)")
+    st.subheader("💊 5. สถิติปัญหาจากการใช้ยา (DRP Summary)")
     df_drp = df.copy()
     df_drp['drp_str'] = df_drp['drp'].astype(str).str.strip()
     df_drp = df_drp[(df_drp['drp_str'] != '') & (df_drp['drp_str'] != '-') & (df_drp['drp_str'].str.lower() != 'nan')]
@@ -131,9 +250,9 @@ def render_dashboard(visits_df, patients_df):
     else:
         st.success("ยังไม่พบรายงานปัญหาการใช้ยา (DRP) ในระบบ")
 
-    # --- ส่วนที่ 5: รายชื่อผู้รับบริการรายวัน ---
+    # --- ส่วนที่ 6: รายชื่อผู้รับบริการรายวัน (เดิมคือส่วนที่ 4) ---
     st.divider()
-    st.subheader("🗓️ 5. ตรวจสอบรายชื่อผู้รับบริการ (Daily Log)")
+    st.subheader("🗓️ 6. ตรวจสอบรายชื่อผู้รับบริการ (Daily Log)")
     
     col_date, col_summary = st.columns([1, 2])
     with col_date:
@@ -152,16 +271,7 @@ def render_dashboard(visits_df, patients_df):
             s1.metric("ทั้งหมด", f"{daily_total} คน")
             s2.metric("รายใหม่ (New)", f"{daily_new} คน")
         
-        pt_lookup = patients_df[['hn', 'prefix', 'first_name', 'last_name']].copy()
-        pt_lookup['hn'] = pt_lookup['hn'].astype(str).str.strip()
-        
-        daily_visits_show = daily_visits.copy()
-        daily_visits_show['hn'] = daily_visits_show['hn'].astype(str).str.strip()
-        
-        merged_df = pd.merge(daily_visits_show, pt_lookup, on='hn', how='left')
-        merged_df['ชื่อ-สกุล'] = merged_df['prefix'] + merged_df['first_name'] + " " + merged_df['last_name']
-        
-        display_df = merged_df[['hn', 'ชื่อ-สกุล', 'is_new_case', 'pefr', 'control_level', 'note']].copy()
+        display_df = daily_visits[['hn', 'full_name', 'is_new_case', 'pefr', 'control_level', 'note']].copy()
         display_df['is_new_case'] = display_df['is_new_case'].apply(lambda x: "🆕 New" if str(x).upper() == 'TRUE' else "")
         display_df.columns = ['HN', 'ชื่อ-สกุล', 'สถานะ', 'PEFR', 'Control', 'Note']
         display_df = display_df.sort_values(by='HN')
@@ -170,35 +280,28 @@ def render_dashboard(visits_df, patients_df):
     else:
         st.info(f"ℹ️ ไม่มีรายการตรวจในวันที่ {selected_date.strftime('%d/%m/%Y')}")
 
-    # --- ✅ ส่วนที่ 6 (ใหม่): สำรองข้อมูล (Backup) ---
+    # --- ส่วนที่ 7: สำรองข้อมูล (Backup) ---
     st.divider()
-    st.subheader("💾 6. สำรองข้อมูล (Backup Database)")
+    st.subheader("💾 7. สำรองข้อมูล (Backup Database)")
     st.info("ระบบจะรวมข้อมูล 'ทะเบียนผู้ป่วย (Patients)' และ 'ประวัติการตรวจ (Visits)' ทั้งหมดเป็นไฟล์ Excel เดียว")
 
-    # ฟังก์ชันแปลง DataFrame เป็น Excel (Bytes)
     def to_excel(df1, df2):
         output = io.BytesIO()
-        # ใช้ XlsxWriter engine
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             df1.to_excel(writer, sheet_name='Patients', index=False)
             df2.to_excel(writer, sheet_name='Visits', index=False)
         processed_data = output.getvalue()
         return processed_data
 
-    # สร้างชื่อไฟล์ตามวันเวลาปัจจุบัน (เช่น asthma_backup_2024-01-20.xlsx)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     file_name = f"asthma_backup_{timestamp}.xlsx"
-
-    # เตรียมไฟล์
     excel_data = to_excel(patients_df, visits_df)
 
-    # ปุ่ม Download
     st.download_button(
         label="📥 ดาวน์โหลดไฟล์ Backup (.xlsx)",
         data=excel_data,
         file_name=file_name,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary", # ปุ่มสีแดง/ส้มให้เด่น
+        type="primary",
         help="คลิกเพื่อดาวน์โหลดข้อมูลทั้งหมดลงเครื่องคอมพิวเตอร์"
     )
-
