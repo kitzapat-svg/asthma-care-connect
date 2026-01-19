@@ -18,23 +18,78 @@ def render_dashboard(visits_df, patients_df):
     )
     
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    df['month_year'] = df['date'].dt.strftime('%Y-%m') # สำหรับรายเดือน
+    # แปลง next_appt เป็น datetime เพื่อใช้เปรียบเทียบ
+    df['next_appt'] = pd.to_datetime(df['next_appt'], errors='coerce')
+    
+    df['month_year'] = df['date'].dt.strftime('%Y-%m') 
     df['full_name'] = df['prefix'].fillna('') + df['first_name'].fillna('') + " " + df['last_name'].fillna('')
     
-    # --- ส่วนที่ 1: สรุปยอดประจำวัน ---
+    # ==============================================================================
+    # 🔔 ส่วนใหม่: แจ้งเตือนนัดหมายวันนี้ (Today's Appointments & DRP Alert)
+    # ==============================================================================
+    today_date = datetime.now().date()
+    
+    # กรองหาแถวที่มีวันนัด (next_appt) ตรงกับวันนี้
+    # หมายเหตุ: ข้อมูลนี้มาจาก Visit รอบที่แล้ว ซึ่งจะมีข้อมูล DRP ของรอบที่แล้วติดมาด้วยพอดี
+    appts_today = df[df['next_appt'].dt.date == today_date].copy()
+    
+    count_appt = len(appts_today)
+    
+    st.markdown(f"### 🔔 นัดหมายประจำวันที่ : {today_date.strftime('%d/%m/%Y')}")
+    
+    if count_appt > 0:
+        st.info(f"มีผู้ป่วยนัดวันนี้จำนวน **{count_appt}** ราย")
+        
+        # เตรียมข้อมูลแสดงผล
+        display_appt = appts_today[['hn', 'full_name', 'drp']].copy()
+        
+        # ฟังก์ชันเช็ค DRP เพื่อสร้าง Alert
+        def check_drp_status(val):
+            val_str = str(val).strip()
+            if val_str not in ['', '-', 'nan', 'None']:
+                return f"⚠️ {val_str}" # มีปัญหา ให้โชว์ Warning
+            return "✅ ปกติ" # ไม่มีปัญหา
+
+        display_appt['drp_status'] = display_appt['drp'].apply(check_drp_status)
+        
+        # เรียงลำดับ: เอาคนที่มีปัญหา DRP ขึ้นก่อน จะได้เห็นชัดๆ
+        display_appt['has_issue'] = display_appt['drp_status'].str.contains('⚠️')
+        display_appt = display_appt.sort_values(by=['has_issue', 'hn'], ascending=[False, True])
+        
+        # แสดงตาราง
+        st.dataframe(
+            display_appt[['hn', 'full_name', 'drp_status']],
+            column_config={
+                "hn": "HN",
+                "full_name": "ชื่อ-สกุล",
+                "drp_status": st.column_config.TextColumn("สถานะการใช้ยา (Visit ล่าสุด)", width="large"),
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+    else:
+        st.success("✅ ไม่มีรายชื่อผู้ป่วยนัดหมายในวันนี้")
+
+    st.divider()
+
+    # ==============================================================================
+    # (ส่วนที่เหลือเหมือนเดิม)
+    # ==============================================================================
+
+    # --- ส่วนที่ 1: สรุปยอดประจำวัน (Walk-in / Visit จริงที่เกิดขึ้นวันนี้) ---
     today_str = datetime.now().strftime('%Y-%m-%d')
-    today_df = df[df['date'].dt.strftime('%Y-%m-%d') == today_str]
-    count_today_total = len(today_df)
+    today_visits_real = df[df['date'].dt.strftime('%Y-%m-%d') == today_str]
+    count_today_total = len(today_visits_real)
     
     if 'is_new_case' in df.columns:
-        today_new_cases = today_df[today_df['is_new_case'].astype(str).str.upper() == 'TRUE']
+        today_new_cases = today_visits_real[today_visits_real['is_new_case'].astype(str).str.upper() == 'TRUE']
         count_today_new = len(today_new_cases)
     else:
         count_today_new = 0
         
     total_patients = len(df['hn'].unique())
 
-    st.subheader(f"📅 สรุปยอดประจำวัน ({datetime.now().strftime('%d/%m/%Y')})")
+    st.subheader(f"📅 สรุปยอดผู้มารับบริการจริง")
     
     m1, m2, m3 = st.columns(3)
     m1.metric("ผู้รับบริการวันนี้", f"{count_today_total} คน", "Visits", delta_color="off")
@@ -42,12 +97,10 @@ def render_dashboard(visits_df, patients_df):
     m3.metric("ทะเบียนผู้ป่วยสะสม", f"{total_patients} คน")
     st.divider()
 
-    # ==============================================================================
-    # 📈 ส่วนที่ 2: ปริมาณงานรายเดือน (Monthly Workload)
-    # ==============================================================================
+    # --- ส่วนที่ 2: ปริมาณงานรายเดือน (Monthly Workload) ---
     st.subheader("📈 1. ปริมาณงานรายเดือน (Monthly Workload)")
     
-    # 2.1 กราฟแนวโน้ม (Monthly Trend Chart) - ยังคงกราฟเส้นรายเดือนไว้
+    # 2.1 กราฟแนวโน้ม
     monthly_visits = df.groupby('month_year').size().reset_index(name='Total Visits')
     
     if 'is_new_case' in df.columns:
@@ -97,46 +150,30 @@ def render_dashboard(visits_df, patients_df):
 
     st.divider()
 
-    # ==============================================================================
-    # 📊 ส่วนที่ 3: ปริมาณงานรายสัปดาห์ (Weekly Workload) - 4 สัปดาห์ย้อนหลัง
-    # ==============================================================================
+    # --- ส่วนที่ 3: ปริมาณงานรายสัปดาห์ (4 Weeks) ---
     st.subheader("📊 2. ปริมาณงานรายสัปดาห์ (4 Weeks Lookback)")
     
-    # 3.1 เตรียมข้อมูล 4 สัปดาห์ย้อนหลัง
     weeks_to_look_back = 4
     four_weeks_ago = datetime.now() - timedelta(weeks=weeks_to_look_back)
     df_weekly = df[df['date'] >= four_weeks_ago].copy()
     
     if not df_weekly.empty:
-        # หาวันจันทร์ของแต่ละสัปดาห์
         df_weekly['week_start'] = df_weekly['date'].dt.to_period('W').apply(lambda r: r.start_time)
         
-        # --- ✅ ส่วนแสดงค่าเฉลี่ย (แทนกราฟ) ---
         total_visits_period = len(df_weekly)
         total_new_period = len(df_weekly[df_weekly['is_new_case'].astype(str).str.upper() == 'TRUE'])
         
-        # คำนวณเฉลี่ย
         avg_visits_per_week = total_visits_period / weeks_to_look_back
         avg_new_per_week = total_new_period / weeks_to_look_back
         
-        # แสดง Metric
         c_avg1, c_avg2 = st.columns(2)
         with c_avg1:
-            st.metric(
-                label=f"เฉลี่ยผู้ป่วย (ย้อนหลัง {weeks_to_look_back} สัปดาห์)", 
-                value=f"{avg_visits_per_week:.1f} คน/สัปดาห์"
-            )
+            st.metric(label=f"เฉลี่ยผู้ป่วย (ย้อนหลัง {weeks_to_look_back} สัปดาห์)", value=f"{avg_visits_per_week:.1f} คน/สัปดาห์")
         with c_avg2:
-            st.metric(
-                label="เฉลี่ยผู้ป่วยใหม่", 
-                value=f"{avg_new_per_week:.1f} คน/สัปดาห์"
-            )
+            st.metric(label="เฉลี่ยผู้ป่วยใหม่", value=f"{avg_new_per_week:.1f} คน/สัปดาห์")
         
-        st.write("") # เว้นบรรทัด
-        
-        # --- (กราฟถูกลบออกไปแล้วในส่วนนี้) ---
+        st.write("") 
 
-        # 3.2 ตารางรายสัปดาห์ (4 สัปดาห์)
         st.markdown("##### 📂 รายละเอียดรายสัปดาห์")
         unique_weeks = sorted(df_weekly['week_start'].unique(), reverse=True)
         
@@ -240,7 +277,7 @@ def render_dashboard(visits_df, patients_df):
     else:
         st.success("ยังไม่พบรายงานปัญหาการใช้ยา (DRP) ในระบบ")
 
-    # --- ส่วนที่ 6: รายชื่อผู้รับบริการรายวัน ---
+    # --- ส่วนที่ 6: รายชื่อผู้รับบริการรายวัน (Log) ---
     st.divider()
     st.subheader("🗓️ 6. ตรวจสอบรายชื่อผู้รับบริการ (Daily Log)")
     
