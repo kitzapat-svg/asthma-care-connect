@@ -3,15 +3,12 @@ import pandas as pd
 from datetime import datetime
 import qrcode
 import io
-import pandas as pd
-from datetime import datetime
-import qrcode
-import io
 import base64
-import uuid  # ✅ Import UUID
+import uuid
 
 # Import Utils
-from utils.gsheet_handler import save_patient_data, save_visit_data, update_patient_status, update_patient_token  # ✅ Add update_patient_token
+# ⚠️ ตรวจสอบว่าใน utils/gsheet_handler.py มีฟังก์ชัน update_patient_token แล้วหรือยัง
+from utils.gsheet_handler import save_patient_data, save_visit_data, update_patient_status, update_patient_token
 from utils.calculations import (
     calculate_predicted_pefr, get_action_plan_zone, get_percent_predicted,
     check_technique_status, plot_pefr_chart, generate_qr
@@ -51,11 +48,14 @@ def render_register_patient(patients_db):
                 st.error(f"❌ HN {formatted_hn} มีอยู่ในระบบแล้ว")
                 return
             
+            # Generate Token ตั้งแต่ตอนสมัคร
+            new_token = str(uuid.uuid4())
+            
             new_pt_data = {
                 "hn": formatted_hn, "prefix": reg_prefix, "first_name": reg_fname,
                 "last_name": reg_lname, "dob": str(reg_dob),
                 "best_pefr": reg_best_pefr, "height": reg_height,
-                "public_token": str(uuid.uuid4())  # ✅ Generate Token for New Patient
+                "public_token": new_token
             }
             try:
                 save_patient_data(new_pt_data)
@@ -83,14 +83,15 @@ def render_search_patient(patients_db, visits_db, base_url):
         if current_status == "Discharge": status_color = "grey"
         elif current_status == "COPD": status_color = "orange"
 
-        # --- ✅ Security: ตรวจสอบ/สร้าง Token ---
+        # --- ✅ Security: ตรวจสอบ/สร้าง Token (ถ้าไม่มี) ---
         public_token = pt_data.get('public_token', '')
-        if pd.isna(public_token) or str(public_token).strip() == "":
+        # ถ้า Token ว่าง หรือเป็น NaN ให้สร้างใหม่
+        if pd.isna(public_token) or str(public_token).strip() == "" or str(public_token).lower() == "nan":
             with st.spinner("Creating Secure Token..."):
                 new_token = str(uuid.uuid4())
                 if update_patient_token(selected_hn, new_token):
                     public_token = new_token
-                    st.rerun()
+                    st.rerun() # รีโหลดเพื่อดึงข้อมูลใหม่
                 else:
                     st.error("Failed to generate token")
 
@@ -146,7 +147,7 @@ def render_search_patient(patients_db, visits_db, base_url):
             default_controllers = parse_meds(last_actual_visit.get('controller'), controller_options)
             default_relievers = parse_meds(last_actual_visit.get('reliever'), reliever_options)
 
-# ------------------------------------------------------------------
+            # ------------------------------------------------------------------
             # ✅ ส่วนแสดงสถานะล่าสุด
             # ------------------------------------------------------------------
             st.markdown("---")
@@ -198,7 +199,7 @@ def render_search_patient(patients_db, visits_db, base_url):
                         </div>
                     """, unsafe_allow_html=True)
                 
-# --- ช่อง Control Level (ปรับ Logic รองรับชื่อใหม่) ---
+                # --- ช่อง Control Level (HTML Badge) ---
                 with s4:
                     raw_ctrl = last_valid_visit.get('control_level', '-')
                     
@@ -218,12 +219,11 @@ def render_search_patient(patients_db, visits_db, base_url):
                     elif "Well" in ctrl_lvl or "Controlled" == ctrl_lvl: 
                         # ✅ รองรับทั้ง "Well Controlled" (ใหม่) และ "Controlled" (เก่า)
                         c_color = "#10B981"  # เขียว
-                        display_text = "Well Controlled" # บังคับโชว์ชื่อใหม่ให้สวยงาม
+                        display_text = "Well Controlled" 
                     else:
                         c_color = "#94A3B8"  # เทา
                         display_text = "รอประเมิน" if ctrl_lvl == "-" else ctrl_lvl
 
-                    # 3. HTML Badge
                     st.markdown(f"""
                         <div style="display: flex; flex-direction: column; justify-content: flex-start;">
                             <span style="font-size: 14px; color: #606570; margin-bottom: 4px;">Control Level</span>
@@ -347,6 +347,7 @@ def render_search_patient(patients_db, visits_db, base_url):
                 v_pefr = st.number_input("PEFR (L/min)", 0, 900, step=10)
                 v_no_pefr = st.checkbox("ไม่ได้เป่า Peak Flow (N/A)")
             
+            # ✅ ปรับ Radio เป็นชื่อใหม่ (Well Controlled)
             v_control = st.radio(
                 "Control Level", 
                 ["Well Controlled", "Partly Controlled", "Uncontrolled"], 
@@ -387,11 +388,15 @@ def render_search_patient(patients_db, visits_db, base_url):
                     "inhaler_eval": inhaler_summary_text
                 }
                 save_visit_data(new_data)
+                
+                # 🛑 สำคัญ: เอาบรรทัด st.session_state['assess_toggle'] = False ออกไปแล้ว
+                # เพื่อป้องกัน StreamlitAPIException
+                
                 st.success("บันทึกสำเร็จ")
                 st.rerun()
 
         # ==============================================================================
-        # 📇 DIGITAL ASTHMA CARD (แก้ไขให้แสดงผลเป็นรูปภาพ ไม่ใช่โค้ด)
+        # 📇 DIGITAL ASTHMA CARD (แก้ไขให้แสดงผลเป็นรูปภาพ + QR + Secure Link)
         # ==============================================================================
         st.divider()
         st.subheader("📇 Digital Asthma Card")
