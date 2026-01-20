@@ -1,8 +1,11 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
-from datetime import datetime, timedelta # ต้อง import timedelta ด้วย
+from datetime import datetime, timedelta
 import io
+from utils.style import load_custom_css
+
+load_custom_css()
 
 def render_dashboard(visits_df, patients_df):
     if visits_df.empty:
@@ -28,13 +31,16 @@ def render_dashboard(visits_df, patients_df):
     thai_now = datetime.now() + timedelta(hours=7)
     today_date = thai_now.date()
     today_str_iso = today_date.strftime('%Y-%m-%d') # สำหรับเทียบกับ DataFrame
-    
+
     # ==============================================================================
     # 🔔 ส่วนใหม่: แจ้งเตือนนัดหมายวันนี้ (Today's Appointments & DRP Alert)
     # ==============================================================================
+    today_date = datetime.now().date()
     
-    # กรองหาแถวที่มีวันนัด (next_appt) ตรงกับวันนี้ (เวลาไทย)
+    # กรองหาแถวที่มีวันนัด (next_appt) ตรงกับวันนี้
+    # หมายเหตุ: ข้อมูลนี้มาจาก Visit รอบที่แล้ว ซึ่งจะมีข้อมูล DRP ของรอบที่แล้วติดมาด้วยพอดี
     appts_today = df[df['next_appt'].dt.date == today_date].copy()
+    
     count_appt = len(appts_today)
     
     st.markdown(f"### 🔔 นัดหมายประจำวันที่ : {today_date.strftime('%d/%m/%Y')}")
@@ -54,7 +60,7 @@ def render_dashboard(visits_df, patients_df):
 
         display_appt['drp_status'] = display_appt['drp'].apply(check_drp_status)
         
-        # เรียงลำดับ: เอาคนที่มีปัญหา DRP ขึ้นก่อน
+        # เรียงลำดับ: เอาคนที่มีปัญหา DRP ขึ้นก่อน จะได้เห็นชัดๆ
         display_appt['has_issue'] = display_appt['drp_status'].str.contains('⚠️')
         display_appt = display_appt.sort_values(by=['has_issue', 'hn'], ascending=[False, True])
         
@@ -75,12 +81,12 @@ def render_dashboard(visits_df, patients_df):
     st.divider()
 
     # ==============================================================================
-    # (ส่วนที่เหลือเหมือนเดิม แต่ปรับตัวแปรวันที่ให้ใช้ Timezone ไทย)
+    # (ส่วนที่เหลือเหมือนเดิม)
     # ==============================================================================
 
     # --- ส่วนที่ 1: สรุปยอดประจำวัน (Walk-in / Visit จริงที่เกิดขึ้นวันนี้) ---
-    # ใช้ today_str_iso ที่ปรับเวลาไทยแล้ว
-    today_visits_real = df[df['date'].dt.strftime('%Y-%m-%d') == today_str_iso]
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    today_visits_real = df[df['date'].dt.strftime('%Y-%m-%d') == today_str]
     count_today_total = len(today_visits_real)
     
     if 'is_new_case' in df.columns:
@@ -124,7 +130,7 @@ def render_dashboard(visits_df, patients_df):
     st.altair_chart(workload_chart, use_container_width=True)
 
     # 2.2 ตารางสรุปรายเดือน
-    one_year_ago = thai_now - timedelta(days=365) # ใช้เวลาไทย
+    one_year_ago = datetime.now() - timedelta(days=365)
     df_1y = df[df['date'] >= one_year_ago].copy()
     
     if not df_1y.empty:
@@ -156,7 +162,7 @@ def render_dashboard(visits_df, patients_df):
     st.subheader("📊 2. ปริมาณงานรายสัปดาห์ (4 Weeks Lookback)")
     
     weeks_to_look_back = 4
-    four_weeks_ago = thai_now - timedelta(weeks=weeks_to_look_back) # ใช้เวลาไทย
+    four_weeks_ago = datetime.now() - timedelta(weeks=weeks_to_look_back)
     df_weekly = df[df['date'] >= four_weeks_ago].copy()
     
     if not df_weekly.empty:
@@ -214,7 +220,7 @@ def render_dashboard(visits_df, patients_df):
         latest_visits = df.sort_values('date').groupby('hn').tail(1)
         control_counts = latest_visits['control_level'].value_counts().reset_index()
         control_counts.columns = ['status', 'count']
-        domain = ['Controlled', 'Partly Controlled', 'Uncontrolled']
+        domain = ['Well Controlled', 'Partly Controlled', 'Uncontrolled']
         range_ = ['#66BB6A', '#FFCA28', '#EF5350'] 
 
         pie = alt.Chart(control_counts).mark_arc(innerRadius=60).encode(
@@ -285,8 +291,7 @@ def render_dashboard(visits_df, patients_df):
     
     col_date, col_summary = st.columns([1, 2])
     with col_date:
-        # ใช้วันที่ปัจจุบัน (ไทย) เป็นค่าเริ่มต้น
-        selected_date = st.date_input("เลือกวันที่ต้องการดูข้อมูล", value=thai_now.date())
+        selected_date = st.date_input("เลือกวันที่ต้องการดูข้อมูล", value=datetime.today())
     
     daily_visits = df[df['date'].dt.date == selected_date]
     
@@ -323,8 +328,7 @@ def render_dashboard(visits_df, patients_df):
         processed_data = output.getvalue()
         return processed_data
 
-    # ชื่อไฟล์ Backup ก็ควรเป็นเวลาไทยด้วย
-    timestamp = thai_now.strftime("%Y-%m-%d_%H-%M")
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     file_name = f"asthma_backup_{timestamp}.xlsx"
     excel_data = to_excel(patients_df, visits_df)
 

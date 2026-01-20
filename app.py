@@ -1,16 +1,22 @@
 import streamlit as st
 import pandas as pd
+import io
 
 # Import Utils
 from utils.gsheet_handler import load_data_staff, load_data_fast
+from utils.style import load_custom_css
 
 # Import Views (รวมฟีเจอร์ใหม่ทั้งหมด)
 from views.patient_view import render_patient_view
 from views.staff_dashboard import render_dashboard
 from views.staff_action import render_register_patient, render_search_patient
+from views.staff_import import render_import_appointment
+
 
 # --- Page Config ---
 st.set_page_config(page_title="Asthma Care Connect", layout="centered", page_icon="🫁")
+# 👇 เพิ่มบรรทัดนี้ เพื่อโหลด CSS ทันทีที่เข้าเว็บ
+load_custom_css()
 
 # ==========================================
 # 🔐 SECURITY & CONFIG (กลับมาใช้ Logic เดิมของคุณ)
@@ -81,10 +87,14 @@ else:
     # Menu
     mode = st.sidebar.radio(
         "เมนูหลัก", 
-        ["🔍 ค้นหา/บันทึกอาการ", "➕ ลงทะเบียนผู้ป่วยใหม่", "📊 Dashboard ภาพรวม"]
+        [
+            "🔍 ค้นหา/บันทึกอาการ", 
+            "➕ ลงทะเบียนผู้ป่วยใหม่", 
+            "📊 Dashboard ภาพรวม",
+            "📥 นำเข้าข้อมูล (Import)"  # ✅ เพิ่มเมนูนี้
+        ]
     )
 
-    # Route ไปยัง View ต่างๆ
     if mode == "🔍 ค้นหา/บันทึกอาการ":
         render_search_patient(patients_db, visits_db, BASE_URL)
         
@@ -93,3 +103,6 @@ else:
         
     elif mode == "📊 Dashboard ภาพรวม":
         render_dashboard(visits_db, patients_db)
+        
+    elif mode == "📥 นำเข้าข้อมูล (Import)": # ✅ เพิ่มเงื่อนไขนี้
+        render_import_appointment(patients_db, visits_db)

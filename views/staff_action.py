@@ -1,6 +1,9 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import qrcode
+import io
+import base64
 
 # Import Utils
 from utils.gsheet_handler import save_patient_data, save_visit_data, update_patient_status
@@ -9,6 +12,17 @@ from utils.calculations import (
     check_technique_status, plot_pefr_chart, generate_qr
 )
 
+# --- Helper Function: แปลง QR เป็น Base64 ---
+def get_base64_qr(data):
+    qr = qrcode.QRCode(version=1, box_size=10, border=1)
+    qr.add_data(data)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buffered = io.BytesIO()
+    img.save(buffered, format="PNG")
+    return base64.b64encode(buffered.getvalue()).decode()
+
+# --- 1. ฟังก์ชันลงทะเบียนผู้ป่วยใหม่ ---
 def render_register_patient(patients_db):
     st.title("➕ ลงทะเบียนผู้ป่วยรายใหม่")
     with st.form("register_form", clear_on_submit=True):
@@ -43,6 +57,7 @@ def render_register_patient(patients_db):
             except Exception as e:
                 st.error(f"Error: {e}")
 
+# --- 2. ฟังก์ชันค้นหาและจัดการผู้ป่วย (รวม Digital Card) ---
 def render_search_patient(patients_db, visits_db, base_url):
     hn_list = patients_db['hn'].unique().tolist()
     hn_list.sort()
@@ -95,7 +110,7 @@ def render_search_patient(patients_db, visits_db, base_url):
         c3.metric("ส่วนสูง", f"{height} cm")
         c4.metric("Standard PEFR", f"{int(predicted_pefr)}")
 
-        # --- Smart Form Variables (ดึงยาจาก Visit ล่าสุดจริง ไม่สน PEFR) ---
+        # --- Smart Form Variables ---
         controller_options = ["Seretide", "Budesonide", "Symbicort"]
         reliever_options = ["Salbutamol", "Berodual"]
         default_controllers = []
@@ -114,11 +129,10 @@ def render_search_patient(patients_db, visits_db, base_url):
             default_controllers = parse_meds(last_actual_visit.get('controller'), controller_options)
             default_relievers = parse_meds(last_actual_visit.get('reliever'), reliever_options)
 
-            # ------------------------------------------------------------------
-            # ✅ ส่วนแสดงสถานะล่าสุด (Smart Filter + New UI)
+# ------------------------------------------------------------------
+            # ✅ ส่วนแสดงสถานะล่าสุด
             # ------------------------------------------------------------------
             st.markdown("---")
-            # กรองหาเฉพาะที่มีการเป่าจริง (PEFR > 0)
             valid_pefr_visits = pt_visits_sorted[pt_visits_sorted['pefr'] > 0]
             
             if not valid_pefr_visits.empty:
@@ -136,18 +150,15 @@ def render_search_patient(patients_db, visits_db, base_url):
                     last_actual_str = last_actual_visit['date'].strftime('%d/%m/%Y')
                     st.caption(f"ℹ️ (ล่าสุดเมื่อ {last_actual_str} ไม่ได้เป่า Peak Flow ระบบจึงแสดงผลจากครั้งก่อนหน้า)")
                 
-                # 🔥 ปรับ Layout ให้กว้างขึ้นเพื่อรองรับ Badge
-                s1, s2, s3, s4 = st.columns([1, 1, 1.7, 1.3])
+                # 🔥 ปรับสัดส่วนคอลัมน์ใหม่ (ลด Zone ลงนิด เพิ่ม Control Level)
+                s1, s2, s3, s4 = st.columns([1, 1, 1.5, 1.8])
                 
                 s1.metric("PEFR ล่าสุด", f"{current_pefr}")
                 s2.metric("% มาตรฐาน", f"{pct_std}%")
                 
-                # 🔥 Custom HTML Badge สำหรับ Zone
+                # --- ช่อง Zone ---
                 with s3:
-                    # ตัดคำว่า "Zone" ออกเพื่อให้สั้นลง (ถ้าต้องการ) หรือแสดงเต็มก็ได้
-                    # short_zone_name = zone_name.replace("Zone", "").strip() 
-                    short_zone_name = zone_name # ใช้ชื่อเต็มตามที่คุณต้องการ
-                    
+                    short_zone_name = zone_name
                     st.markdown(f"""
                         <div style="display: flex; flex-direction: column; justify-content: flex-start;">
                             <span style="font-size: 14px; color: #606570; margin-bottom: 4px;">Zone</span>
@@ -155,11 +166,11 @@ def render_search_patient(patients_db, visits_db, base_url):
                                 background-color: {zone_color}15;
                                 color: {zone_color};
                                 border: 1px solid {zone_color};
-                                padding: 6px 12px;
+                                padding: 6px 10px;
                                 border-radius: 20px; 
                                 text-align: center;
                                 font-weight: 600;
-                                font-size: 16px;
+                                font-size: 15px;
                                 line-height: 1.2;
                                 white-space: nowrap;
                                 overflow: hidden;
@@ -170,17 +181,60 @@ def render_search_patient(patients_db, visits_db, base_url):
                         </div>
                     """, unsafe_allow_html=True)
                 
-                s4.metric("Control Level", last_valid_visit.get('control_level', '-'))
+# --- ช่อง Control Level (ปรับ Logic รองรับชื่อใหม่) ---
+                with s4:
+                    raw_ctrl = last_valid_visit.get('control_level', '-')
+                    
+                    # 1. Cleaning
+                    if pd.isna(raw_ctrl) or str(raw_ctrl).strip() in ['', 'nan', 'None']:
+                        ctrl_lvl = "-"
+                    else:
+                        ctrl_lvl = str(raw_ctrl).strip()
+
+                    # 2. Logic สีป้าย (Updated for "Well Controlled")
+                    if "Uncontrolled" in ctrl_lvl:
+                        c_color = "#EF4444"  # แดง
+                        display_text = ctrl_lvl
+                    elif "Partly" in ctrl_lvl:
+                        c_color = "#F59E0B"  # ส้ม
+                        display_text = ctrl_lvl
+                    elif "Well" in ctrl_lvl or "Controlled" == ctrl_lvl: 
+                        # ✅ รองรับทั้ง "Well Controlled" (ใหม่) และ "Controlled" (เก่า)
+                        c_color = "#10B981"  # เขียว
+                        display_text = "Well Controlled" # บังคับโชว์ชื่อใหม่ให้สวยงาม
+                    else:
+                        c_color = "#94A3B8"  # เทา
+                        display_text = "รอประเมิน" if ctrl_lvl == "-" else ctrl_lvl
+
+                    # 3. HTML Badge
+                    st.markdown(f"""
+                        <div style="display: flex; flex-direction: column; justify-content: flex-start;">
+                            <span style="font-size: 14px; color: #606570; margin-bottom: 4px;">Control Level</span>
+                            <div style="
+                                background-color: {c_color}15;
+                                color: {c_color};
+                                border: 1px solid {c_color};
+                                padding: 6px 10px;
+                                border-radius: 20px; 
+                                text-align: center;
+                                font-weight: 600;
+                                font-size: 14px;
+                                white-space: nowrap;
+                                overflow: hidden;
+                                text-overflow: ellipsis;
+                            ">
+                                {display_text}
+                            </div>
+                        </div>
+                    """, unsafe_allow_html=True)
 
             else:
                 st.warning("⚠️ ยังไม่มีข้อมูลการเป่า Peak Flow (มีแต่ประวัติรับยา)")
             
-            # Alert DRP
             last_drp = str(last_actual_visit.get('drp', '')).strip()
             if last_drp and last_drp != "-" and last_drp.lower() != "nan":
                 st.warning(f"⚠️ **DRP ครั้งล่าสุด:** {last_drp}")
 
-            # Alert Tech Status
             tech_status, tech_days, tech_last_date = check_technique_status(pt_visits)
             st.write("") 
             if tech_status == "overdue":
@@ -193,7 +247,6 @@ def render_search_patient(patients_db, visits_db, base_url):
         st.divider()
         st.subheader("📈 กราฟติดตามอาการ")
         if not pt_visits.empty:
-            # กราฟแสดงเฉพาะจุดที่มีการเป่าจริง
             valid_pefr_visits_all = pt_visits_sorted[pt_visits_sorted['pefr'] > 0]
             if not valid_pefr_visits_all.empty:
                 chart = plot_pefr_chart(valid_pefr_visits_all, ref_pefr)
@@ -213,7 +266,6 @@ def render_search_patient(patients_db, visits_db, base_url):
         st.divider()
         st.subheader("📝 บันทึก Visit")
         
-        # --- Checklist สอนเทคนิค (Interactive) ---
         inhaler_summary_text = "-" 
         tech_check_status = "ไม่"
 
@@ -270,7 +322,6 @@ def render_search_patient(patients_db, visits_db, base_url):
                 if adv_rinse: inhaler_summary_text += " | Adv:Rinse"
                 if adv_clean: inhaler_summary_text += " | Adv:Clean"
 
-        # --- Form บันทึก ---
         with st.form("new_visit", clear_on_submit=True):
             col_a, col_b = st.columns(2)
             v_date = col_a.date_input("วันที่", value=datetime.today())
@@ -279,7 +330,11 @@ def render_search_patient(patients_db, visits_db, base_url):
                 v_pefr = st.number_input("PEFR (L/min)", 0, 900, step=10)
                 v_no_pefr = st.checkbox("ไม่ได้เป่า Peak Flow (N/A)")
             
-            v_control = st.radio("Control", ["Controlled", "Partly Controlled", "Uncontrolled"], horizontal=True)
+            v_control = st.radio(
+                "Control Level", 
+                ["Well Controlled", "Partly Controlled", "Uncontrolled"], 
+                horizontal=True
+            )
             
             c_med1, c_med2 = st.columns(2)
             v_cont = c_med1.multiselect("Controller", controller_options, default=default_controllers)
@@ -319,25 +374,139 @@ def render_search_patient(patients_db, visits_db, base_url):
                 st.success("บันทึกสำเร็จ")
                 st.rerun()
 
-        # 📇 DIGITAL ASTHMA CARD
+        # ==============================================================================
+        # 📇 DIGITAL ASTHMA CARD (แก้ไขให้แสดงผลเป็นรูปภาพ ไม่ใช่โค้ด)
+        # ==============================================================================
         st.divider()
         st.subheader("📇 Digital Asthma Card")
-        # ใช้ HN Link (ตามที่ User เลือก)
         link = f"{base_url}/?hn={selected_hn}"
         
-        with st.container(border=True):
-            c_qr, c_info = st.columns([1, 2.5])
-            with c_qr:
-                st.image(generate_qr(link), use_container_width=True)
-                st.caption("📱 สแกนเพื่อดูประวัติ")
-            with c_info:
-                st.markdown(f"### {pt_data['prefix']}{pt_data['first_name']} {pt_data['last_name']}")
-                st.markdown(f"**HN:** `{selected_hn}`")
-                c_age, c_height = st.columns(2)
-                c_age.markdown(f"**อายุ:** {age} ปี")
-                c_height.markdown(f"**ส่วนสูง:** {height} cm")
-                st.info(f"🎯 **Predicted PEFR:** {int(predicted_pefr)} L/min")
-                st.link_button("🔗 เปิดหน้าคนไข้ (Patient View)", link, type="primary", use_container_width=True)
+        # 1. เตรียมข้อมูลสำหรับบัตร
+        card_best_pefr = int(predicted_pefr)
+        if card_best_pefr == 0:
+            card_best_pefr = pt_data.get('best_pefr', 0)
+
+        if card_best_pefr > 0:
+            green_lim = int(card_best_pefr * 0.8)
+            yellow_lim = int(card_best_pefr * 0.6)
+            txt_g = f"> {green_lim}"
+            txt_y = f"{yellow_lim} - {green_lim}"
+            txt_r = f"< {yellow_lim}"
+        else:
+            txt_g, txt_y, txt_r = "-", "-", "-"
+
+        # 2. สร้าง QR Code Base64
+        qr_b64 = get_base64_qr(link)
+
+        # 3. HTML/CSS
+        card_html = f"""
+        <style>
+            .asthma-card {{
+                position: relative;
+                width: 100%;
+                max-width: 420px;
+                padding-top: 63%; /* Aspect Ratio 1.58:1 */
+                background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
+                border-radius: 16px;
+                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+                border: 1px solid #cbd5e1;
+                overflow: hidden;
+                font-family: 'Kanit', sans-serif;
+                color: #334155;
+            }}
+            .card-content {{
+                position: absolute;
+                top: 0; left: 0; bottom: 0; right: 0;
+                padding: 16px 20px;
+                display: flex;
+                flex-direction: column;
+                justify-content: space-between;
+            }}
+            .card-header {{
+                display: flex; justify-content: space-between; align-items: flex-start;
+                margin-bottom: 5px;
+            }}
+            .card-chip {{
+                width: 42px; height: 28px;
+                background: linear-gradient(135deg, #e2e8f0 0%, #94a3b8 100%);
+                border-radius: 6px; border: 1px solid #64748b; opacity: 0.8;
+            }}
+            .card-logo {{
+                font-size: 10px; font-weight: bold; color: #94a3b8; letter-spacing: 1px; text-transform: uppercase;
+            }}
+            .card-body {{
+                display: flex; justify-content: space-between; align-items: center; flex: 1;
+            }}
+            .info-col {{ 
+                flex: 1; padding-right: 10px; display: flex; flex-direction: column; justify-content: center;
+            }}
+            .pt-name {{ 
+                font-size: 18px; font-weight: 600; color: #1e293b; line-height: 1.3; margin-bottom: 6px;
+                display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+            }}
+            .pt-meta {{ font-size: 12px; color: #64748B; }}
+            .pt-meta b {{ color: #0f172a; font-size: 14px; font-weight: 600; }}
+            .qr-box {{
+                background: white; padding: 4px; border-radius: 8px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.08); border: 1px solid #e2e8f0;
+                display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+            }}
+            .zone-container {{ display: flex; gap: 6px; margin-top: auto; }}
+            .zone-box {{ 
+                flex: 1; padding: 6px 2px; border-radius: 8px; text-align: center; 
+                display: flex; flex-direction: column; justify-content: center; 
+            }}
+            .z-green {{ background: #DCFCE7; border: 1px solid #86EFAC; color: #166534; }}
+            .z-yellow {{ background: #FEF9C3; border: 1px solid #FDE047; color: #854D0E; }}
+            .z-red {{ background: #FEE2E2; border: 1px solid #FCA5A5; color: #991B1B; }}
+            .z-lbl {{ font-size: 8px; font-weight: 700; text-transform: uppercase; margin-bottom: 2px; opacity: 0.9; }}
+            .z-val {{ font-size: 11px; font-weight: 800; letter-spacing: 0.5px; }}
+        </style>
         
-        with st.expander("🔗 คัดลอกลิงก์โดยตรง"):
-            st.text_input("Direct Link", value=link, label_visibility="collapsed")
+        <div class="asthma-card">
+            <div class="card-content">
+                <div class="card-header">
+                    <div class="card-chip"></div>
+                    <div class="card-logo">Asthma Care Card</div>
+                </div>
+                <div class="card-body">
+                    <div class="info-col">
+                        <div class="pt-name">{pt_data['prefix']}{pt_data['first_name']} {pt_data['last_name']}</div>
+                        <div class="pt-meta">
+                            HN: {selected_hn} <br> 
+                            Ref. PEFR: <b>{card_best_pefr}</b>
+                        </div>
+                    </div>
+                    <div class="qr-box">
+                        <img src="data:image/png;base64,{qr_b64}" width="65" height="65" style="display:block; border-radius: 4px;">
+                    </div>
+                </div>
+                <div class="zone-container">
+                    <div class="zone-box z-green">
+                        <span class="z-lbl">Normal</span>
+                        <span class="z-val">{txt_g}</span>
+                    </div>
+                    <div class="zone-box z-yellow">
+                        <span class="z-lbl">Caution</span>
+                        <span class="z-val">{txt_y}</span>
+                    </div>
+                    <div class="zone-box z-red">
+                        <span class="z-lbl">Danger</span>
+                        <span class="z-val">{txt_r}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        """
+        
+        # แสดงผล
+        c_main, c_dummy = st.columns([1.5, 1])
+        with c_main:
+            # 🚨 จุดสำคัญ: ต้องใช้ st.markdown(..., unsafe_allow_html=True) เท่านั้น!
+            st.markdown(card_html, unsafe_allow_html=True)
+            
+            st.write("")
+            col_b1, col_b2 = st.columns(2)
+            col_b1.link_button("🔗 เปิดหน้าคนไข้", link, use_container_width=True)
+            with col_b2.popover("🔗 Copy Link"):
+                st.code(link)
