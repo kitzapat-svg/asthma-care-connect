@@ -37,18 +37,33 @@ else:
 # 🏥 MAIN APP LOGIC
 # ==========================================
 query_params = st.query_params
-target_hn = query_params.get("hn", None)
+target_token = query_params.get("token", None)
+# target_hn = query_params.get("hn", None) # ❌ Deprecated for Security
 
-if target_hn:
+if target_token:
     # ---------------------------------------------------
-    # 🟢 PATIENT VIEW (มุมมองคนไข้)
+    # 🟢 PATIENT VIEW (Secure Access)
     # ---------------------------------------------------
-    # โหลดข้อมูลแบบ Fast Load
+    # โหลดข้อมูล
     patients_db = load_data_fast("patients")
-    visits_db = load_data_fast("visits")
     
-    # เรียกใช้ไฟล์ views/patient_view.py ที่เราแยกออกมา
-    render_patient_view(target_hn, patients_db, visits_db)
+    # ตรวจสอบ Token
+    target_hn = None
+    if 'public_token' in patients_db.columns:
+        # กรองหาแถวที่ Token ตรงกัน
+        match = patients_db[patients_db['public_token'] == target_token]
+        if not match.empty:
+            target_hn = match.iloc[0]['hn']
+    
+    if target_hn:
+        visits_db = load_data_fast("visits")
+        # เรียกใช้ View เดิม (แต่ผ่าน Security Gate แล้ว)
+        render_patient_view(target_hn, patients_db, visits_db)
+    else:
+        st.error("❌ Invalid or Expired Token (ไม่พบข้อมูลผู้ป่วย)")
+        if st.button("กลับสู่หน้าหลัก"):
+            st.query_params.clear()
+            st.rerun()
 
 else:
     # ---------------------------------------------------

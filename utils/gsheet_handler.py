@@ -112,7 +112,8 @@ def save_patient_data(data_dict):
             data_dict["dob"], 
             data_dict["best_pefr"], 
             data_dict["height"], 
-            "Active"  
+            "Active",
+            data_dict.get("public_token", "")  # ✅ เพิ่ม Token คอลัมน์ที่ 9
         ]
         
         # ✅ KEY FIX: ใช้ value_input_option='USER_ENTERED'
@@ -143,6 +144,30 @@ def update_patient_status(hn, new_status):
             return False
     except Exception as e:
         st.error(f"Update Status Error: {e}")
+        return False
+
+def update_patient_token(hn, token):
+    client = connect_to_gsheet()
+    sh = client.open_by_key(SHEET_ID)
+    worksheet = sh.worksheet("patients")
+    
+    try:
+        # Check Header at (1, 9) -> I
+        header_cell = worksheet.cell(1, 9)
+        if header_cell.value != "public_token":
+            worksheet.update_cell(1, 9, "public_token")
+
+        cell = worksheet.find(str(hn))
+        if cell:
+            # อัปเดต Token ที่คอลัมน์ 9 (I)
+            worksheet.update_cell(cell.row, 9, token)
+            load_data_staff.clear()
+            load_data_fast.clear()
+            return True
+        else:
+            return False
+    except Exception as e:
+        st.error(f"Update Token Error: {e}")
         return False
 
 def save_multiple_visits(rows_list):

@@ -3,10 +3,15 @@ import pandas as pd
 from datetime import datetime
 import qrcode
 import io
+import pandas as pd
+from datetime import datetime
+import qrcode
+import io
 import base64
+import uuid  # ✅ Import UUID
 
 # Import Utils
-from utils.gsheet_handler import save_patient_data, save_visit_data, update_patient_status
+from utils.gsheet_handler import save_patient_data, save_visit_data, update_patient_status, update_patient_token  # ✅ Add update_patient_token
 from utils.calculations import (
     calculate_predicted_pefr, get_action_plan_zone, get_percent_predicted,
     check_technique_status, plot_pefr_chart, generate_qr
@@ -49,7 +54,8 @@ def render_register_patient(patients_db):
             new_pt_data = {
                 "hn": formatted_hn, "prefix": reg_prefix, "first_name": reg_fname,
                 "last_name": reg_lname, "dob": str(reg_dob),
-                "best_pefr": reg_best_pefr, "height": reg_height
+                "best_pefr": reg_best_pefr, "height": reg_height,
+                "public_token": str(uuid.uuid4())  # ✅ Generate Token for New Patient
             }
             try:
                 save_patient_data(new_pt_data)
@@ -76,6 +82,17 @@ def render_search_patient(patients_db, visits_db, base_url):
         status_color = "green"
         if current_status == "Discharge": status_color = "grey"
         elif current_status == "COPD": status_color = "orange"
+
+        # --- ✅ Security: ตรวจสอบ/สร้าง Token ---
+        public_token = pt_data.get('public_token', '')
+        if pd.isna(public_token) or str(public_token).strip() == "":
+            with st.spinner("Creating Secure Token..."):
+                new_token = str(uuid.uuid4())
+                if update_patient_token(selected_hn, new_token):
+                    public_token = new_token
+                    st.rerun()
+                else:
+                    st.error("Failed to generate token")
 
         c_head, c_status = st.columns([3, 1])
         with c_head:
@@ -370,7 +387,6 @@ def render_search_patient(patients_db, visits_db, base_url):
                     "inhaler_eval": inhaler_summary_text
                 }
                 save_visit_data(new_data)
-                st.session_state['assess_toggle'] = False 
                 st.success("บันทึกสำเร็จ")
                 st.rerun()
 
@@ -379,7 +395,8 @@ def render_search_patient(patients_db, visits_db, base_url):
         # ==============================================================================
         st.divider()
         st.subheader("📇 Digital Asthma Card")
-        link = f"{base_url}/?hn={selected_hn}"
+        # link = f"{base_url}/?hn={selected_hn}"  # ❌ ยกเลิก Old Link
+        link = f"{base_url}/?token={public_token}"  # ✅ Use Secure Link
         
         # 1. เตรียมข้อมูลสำหรับบัตร
         card_best_pefr = int(predicted_pefr)
