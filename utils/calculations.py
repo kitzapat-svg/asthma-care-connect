@@ -46,7 +46,7 @@ def get_action_plan_zone(current_pefr, predicted_pefr):
             🏥 <b>สำคัญ:</b> ต้องรีบกลับไปพบแพทย์ 'ก่อนวันนัด' หากมีอาการแย่ลง หรือพ่นยาฉุกเฉินแล้วอาการยังไม่ทุเลา"""
         )
 
-# 4. วาดกราฟแนวโน้ม (Trend Chart) - ✅ เพิ่มพื้นที่กันตกขอบ
+# 4. วาดกราฟแนวโน้ม (Trend Chart)
 def plot_pefr_chart(visits_df, predicted_pefr):
     df = visits_df.copy()
     df['date'] = pd.to_datetime(df['date'])
@@ -70,15 +70,15 @@ def plot_pefr_chart(visits_df, predicted_pefr):
     
     chart = (line + rule_green + rule_red).properties(height=300).interactive()
     
-    # ✅ ปรับ left padding จาก 50 เป็น 70 (เผื่อที่ให้แกน Y เวลา Zoom Out)
     return chart.configure(padding={'left': 70, 'top': 10, 'right': 10, 'bottom': 10})
 
-# 5. ตรวจสอบสถานะเทคนิคพ่นยา
+# 5. ตรวจสอบสถานะเทคนิคพ่นยา (แก้ไข Logic วันที่เหลือ)
 def check_technique_status(visits_df):
     if visits_df.empty:
         return "never", 0, None
 
     visits_df['date'] = pd.to_datetime(visits_df['date'])
+    # หาครั้งที่ "ทำ" ล่าสุด
     tech_visits = visits_df[visits_df['technique_check'].astype(str).str.contains("ทำ", na=False)].sort_values(by='date')
     
     if tech_visits.empty:
@@ -88,9 +88,12 @@ def check_technique_status(visits_df):
     days_since = (pd.Timestamp.now() - last_tech_date).days
     
     if days_since > 365:
+        # ถ้าเกิน 1 ปี -> status = overdue, ส่งค่าวันที่ "เลยมาแล้ว" (days_since)
         return "overdue", days_since, last_tech_date
     else:
-        return "valid", days_since, last_tech_date
+        # ถ้ายังไม่เกิน -> status = valid, ส่งค่าวันที่ "เหลืออยู่" (365 - days_since)
+        days_remaining = 365 - days_since
+        return "valid", days_remaining, last_tech_date
 
 # 6. สร้าง QR Code
 def generate_qr(data):
