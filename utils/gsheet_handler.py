@@ -7,6 +7,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 SHEET_ID = "1LF9Yi6CXHaiITVCqj9jj1agEdEE9S-37FwnaxNIlAaE"
 PATIENTS_SHEET_NAME = "patients"
 VISITS_SHEET_NAME = "visits"
+LOGS_SHEET_NAME = "logs"
 
 def connect_to_gsheet():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -65,7 +66,34 @@ def load_data_staff(worksheet_name):
     except Exception as e:
         st.error(f"Error: {e}")
         st.stop()
+def log_action(user, action, details="-"):
+    """
+    บันทึก Log การใช้งานลง Sheet 'logs'
+    user: ชื่อผู้ใช้งาน (เช่น 'Admin', 'Staff')
+    action: การกระทำ (เช่น 'Login', 'Register Patient')
+    details: รายละเอียดเพิ่มเติม (เช่น HN, Status)
+    """
+    try:
+        client = connect_to_gsheet()
+        sh = client.open_by_key(SHEET_ID)
+        
+        # พยายามเปิด Sheet logs ถ้าไม่มีให้สร้างใหม่ (Auto-create)
+        try:
+            worksheet = sh.worksheet(LOGS_SHEET_NAME)
+        except gspread.WorksheetNotFound:
+            worksheet = sh.add_worksheet(title=LOGS_SHEET_NAME, rows=1000, cols=4)
+            # สร้าง Header
+            worksheet.append_row(["Timestamp", "User", "Action", "Details"])
 
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # บันทึกข้อมูล
+        worksheet.append_row([timestamp, user, action, str(details)])
+        
+    except Exception as e:
+        # กรณี Log พัง ไม่ควรทำให้ระบบหลักพัง แค่ Print error ไว้ดู
+        print(f"⚠️ Logging Failed: {e}")
+        
 # ✅ ฟังก์ชันนี้คือจุดที่มักจะ Error (ผมเช็ค Comma ให้ครบแล้ว)
 def save_visit_data(data_dict):
     client = connect_to_gsheet()
@@ -228,4 +256,5 @@ def update_appointments_batch(updates_list):
     if cells_to_update:
         worksheet.update_cells(cells_to_update)
         load_data_staff.clear()
+
         load_data_fast.clear()
