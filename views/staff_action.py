@@ -1,13 +1,13 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date, timedelta
 import qrcode
 import io
 import base64
 import uuid
 
 # Import Utils
-# ตรวจสอบว่า utils/gsheet_handler.py ของคุณมีฟังก์ชันเหล่านี้ครบถ้วน
+# ตรวจสอบ path ของ utils ให้ถูกต้องตามโครงสร้างโปรเจกต์ของคุณ
 from utils.gsheet_handler import save_patient_data, save_visit_data, update_patient_status, update_patient_token
 from utils.calculations import (
     calculate_predicted_pefr, get_action_plan_zone, get_percent_predicted,
@@ -24,7 +24,7 @@ def get_base64_qr(data):
     img.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode()
 
-# --- 1. ฟังก์ชันลงทะเบียนผู้ป่วยใหม่ ---
+# --- 1. ฟังก์ชันลงทะเบียนผู้ป่วยใหม่ (พร้อม Data Validation) ---
 def render_register_patient(patients_db):
     st.title("➕ ลงทะเบียนผู้ป่วยรายใหม่")
     with st.form("register_form", clear_on_submit=True):
@@ -35,14 +35,38 @@ def render_register_patient(patients_db):
         reg_fname = col3.text_input("ชื่อจริง")
         reg_lname = col4.text_input("นามสกุล")
         col5, col6 = st.columns(2)
-        reg_dob = col5.date_input("วันเกิด", min_value=datetime(1920, 1, 1))
-        reg_height = col6.number_input("ส่วนสูง (cm)", 50, 250, 160)
+        # กำหนด max_value เป็นวันนี้เพื่อกันการใส่วันเกิดในอนาคต
+        reg_dob = col5.date_input("วันเกิด", min_value=datetime(1920, 1, 1), max_value=datetime.today())
+        reg_height = col6.number_input("ส่วนสูง (cm)", 0, 300, 160)
         reg_best_pefr = st.number_input("Personal Best PEFR (ถ้ามี)", 0, 900, 0)
         
         if st.form_submit_button("✅ ลงทะเบียน"):
+            # --- 🛡️ VALIDATION START ---
+            errors = []
+            
+            # 1. เช็คข้อมูลพื้นฐาน
             if not reg_hn_input or not reg_fname or not reg_lname:
-                st.error("❌ กรุณากรอกข้อมูลให้ครบถ้วน")
+                errors.append("กรุณากรอกข้อมูลให้ครบถ้วน (HN, ชื่อ, นามสกุล)")
+            
+            # 2. เช็ค HN Format (ต้องเป็นตัวเลข)
+            if reg_hn_input and not reg_hn_input.isdigit():
+                errors.append("HN ต้องเป็นตัวเลขเท่านั้น")
+
+            # 3. เช็คส่วนสูง (Range ที่เป็นไปได้)
+            if reg_height < 50 or reg_height > 250:
+                errors.append(f"ส่วนสูงผิดปกติ ({reg_height} cm) ควรอยู่ระหว่าง 50 - 250 cm")
+
+            # 4. เช็ควันเกิด (กันเหนียวอีกชั้น)
+            if reg_dob > date.today():
+                errors.append("วันเกิดห้ามเป็นอนาคต")
+
+            # ถ้ามี Error ให้แสดงและจบการทำงาน
+            if errors:
+                for err in errors:
+                    st.error(f"❌ {err}")
                 return
+            # --- 🛡️ VALIDATION END ---
+
             formatted_hn = str(reg_hn_input).strip().zfill(7)
             if formatted_hn in patients_db['hn'].values:
                 st.error(f"❌ HN {formatted_hn} มีอยู่ในระบบแล้ว")
@@ -67,7 +91,7 @@ def render_register_patient(patients_db):
 def render_search_patient(patients_db, visits_db, base_url):
     
     # ==========================================
-    # 🛠️ SESSION STATE MANAGEMENT (FIXED)
+    # 🛠️ SESSION STATE MANAGEMENT (DELAYED RESET)
     # ==========================================
     # ตรวจสอบ Flag ว่าต้องเคลียร์ค่า Checkbox หรือไม่ (จากการกดบันทึกรอบที่แล้ว)
     if st.session_state.get('reset_visit_form', False):
@@ -75,8 +99,7 @@ def render_search_patient(patients_db, visits_db, base_url):
         if 'assess_toggle' in st.session_state:
             st.session_state['assess_toggle'] = False
         
-        # รีเซ็ต Checkbox ย่อยทั้งหมด (step_0 ถึง step_7 และ adv_...)
-        # ใช้ list(...) เพื่อสร้างสำเนา key ก่อน loop ลบ
+        # รีเซ็ต Checkbox ย่อยทั้งหมด
         keys_to_clear = [k for k in st.session_state.keys() if k.startswith('step_') or k.startswith('adv_')]
         for k in keys_to_clear:
             del st.session_state[k]
@@ -305,7 +328,7 @@ def render_search_patient(patients_db, visits_db, base_url):
         tech_check_status = "ไม่"
 
         # =================================================================
-        # 🟢 ส่วนการประเมินเทคนิคพ่นยา (Optional)
+        # 🟢 ส่วนการประเมินเทคนิคพ่นยา (Optional) - Session State Aware
         # =================================================================
         with st.container(border=True):
             st.markdown("##### 🎯 การประเมินเทคนิคพ่นยา (Optional)")
@@ -367,10 +390,10 @@ def render_search_patient(patients_db, visits_db, base_url):
         # =================================================================
         with st.form("new_visit", clear_on_submit=True):
             col_a, col_b = st.columns(2)
-            v_date = col_a.date_input("วันที่", value=datetime.today())
+            v_date = col_a.date_input("วันที่", value=date.today())
             v_is_new = col_a.checkbox("🆕 เป็นผู้ป่วยรายใหม่ (New Case)") 
             with col_b:
-                v_pefr = st.number_input("PEFR (L/min)", 0, 900, step=10)
+                v_pefr = st.number_input("PEFR (L/min)", 0, 999, step=10)
                 v_no_pefr = st.checkbox("ไม่ได้เป่า Peak Flow (N/A)")
             
             # ปรับ Radio เป็นชื่อใหม่ (Well Controlled)
@@ -394,9 +417,35 @@ def render_search_patient(patients_db, visits_db, base_url):
             v_drp = st.text_area("DRP")
             v_adv = st.text_area("Advice")
             v_note = st.text_input("หมายเหตุ")
-            v_next = st.date_input("นัดถัดไป")
+            v_next = st.date_input("นัดถัดไป", value=date.today() + timedelta(days=90))
             
             if st.form_submit_button("💾 บันทึกข้อมูล"):
+                # --- 🛡️ VALIDATION START ---
+                visit_errors = []
+                
+                # 1. เช็ควันที่นัด
+                if v_next < v_date:
+                    visit_errors.append(f"วันนัดถัดไป ({v_next}) ต้องไม่ใช่อดีต (ก่อนวันที่ตรวจ {v_date})")
+                elif v_next == v_date:
+                    st.warning("⚠️ วันนัดถัดไปเป็นวันเดียวกับวันนี้ (ตรวจสอบว่าถูกต้องหรือไม่)")
+
+                # 2. เช็ค PEFR
+                if not v_no_pefr:
+                    if v_pefr == 0:
+                        visit_errors.append("ค่า PEFR เป็น 0 (ถ้าไม่ได้เป่า ให้ติ๊กช่อง 'ไม่ได้เป่า')")
+                    elif v_pefr > 900:
+                        visit_errors.append(f"ค่า PEFR สูงผิดปกติ ({v_pefr}) กรุณาตรวจสอบ")
+                
+                # 3. เช็คความสอดคล้อง (ถ้าญาติรับยา ไม่ควรมี PEFR หรือควรเป็นค่าเก่า)
+                if v_relative_pickup and not v_no_pefr and v_pefr > 0:
+                    st.warning("⚠️ แจ้งเตือน: ญาติรับยาแต่มีการกรอกค่า PEFR (คนไข้มาด้วยหรือไม่?)")
+
+                if visit_errors:
+                    for err in visit_errors:
+                        st.error(f"❌ {err}")
+                    return
+                # --- 🛡️ VALIDATION END ---
+
                 actual_pefr = 0 if v_no_pefr else v_pefr
                 actual_adherence = 0 if v_relative_pickup else v_adh
                 final_note = f"[ญาติรับแทน] {v_note}" if v_relative_pickup else v_note
