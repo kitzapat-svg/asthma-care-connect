@@ -3,7 +3,7 @@ import pandas as pd
 import io
 
 # Import Utils
-from utils.gsheet_handler import load_data_staff, load_data_fast
+from utils.gsheet_handler import load_data_staff, load_data_fast, log_action
 from utils.style import load_custom_css
 
 # Import Views (รวมฟีเจอร์ใหม่ทั้งหมด)
@@ -81,15 +81,18 @@ else:
         if st.button("Login"):
             if pwd == ADMIN_PASSWORD:
                 st.session_state.logged_in = True
+                log_action("Admin", "Login", "Success") # ✅ บันทึก Log Login
                 st.rerun()
             else:
                 st.error("❌ รหัสผ่านผิด")
-        st.stop() # หยุดทำงานถ้ายังไม่ Login
+                log_action("Unknown", "Login Failed", "Wrong Password") # ✅ (Optional) บันทึก Log Login ผิด
+        st.stop()
 
     # --- ส่วนทำงานหลัง Login สำเร็จ ---
     st.sidebar.success("สถานะ: เจ้าหน้าที่ (Logged In)")
     
     if st.sidebar.button("🔓 ออกจากระบบ"):
+        log_action("Admin", "Logout", "User Initiated") # ✅ บันทึก Log Logout
         st.session_state.logged_in = False
         st.rerun()
     
@@ -121,3 +124,4 @@ else:
         
     elif mode == "📥 นำเข้าข้อมูล (Import)": # ✅ เพิ่มเงื่อนไขนี้
         render_import_appointment(patients_db, visits_db)
+
