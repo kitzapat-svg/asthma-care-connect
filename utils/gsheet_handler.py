@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime  # ✅ 1. เพิ่มบรรทัดนี้
 
 # --- CONFIGURATION ---
 SHEET_ID = "1LF9Yi6CXHaiITVCqj9jj1agEdEE9S-37FwnaxNIlAaE"
 PATIENTS_SHEET_NAME = "patients"
 VISITS_SHEET_NAME = "visits"
-LOGS_SHEET_NAME = "logs"
+LOGS_SHEET_NAME = "logs"  # ✅ 2. เพิ่มชื่อ Sheet Logs
 
 def connect_to_gsheet():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -27,6 +28,31 @@ def connect_to_gsheet():
     except Exception as e:
         st.error("❌ ไม่สามารถเชื่อมต่อ Google Sheets ได้ (ตรวจสอบ service_account.json หรือ Secrets)")
         st.stop()
+
+# ✅ 3. เพิ่มฟังก์ชัน log_action นี้ลงไป
+def log_action(user, action, details="-"):
+    """
+    บันทึก Log การใช้งานลง Sheet 'logs'
+    """
+    try:
+        client = connect_to_gsheet()
+        sh = client.open_by_key(SHEET_ID)
+        
+        # พยายามเปิด Sheet logs ถ้าไม่มีให้สร้างใหม่ (Auto-create)
+        try:
+            worksheet = sh.worksheet(LOGS_SHEET_NAME)
+        except gspread.WorksheetNotFound:
+            worksheet = sh.add_worksheet(title=LOGS_SHEET_NAME, rows=1000, cols=4)
+            # สร้าง Header
+            worksheet.append_row(["Timestamp", "User", "Action", "Details"])
+
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # บันทึกข้อมูล
+        worksheet.append_row([timestamp, user, action, str(details)])
+        
+    except Exception as e:
+        print(f"⚠️ Logging Failed: {e}")
 
 @st.cache_data(ttl=60)
 def load_data_fast(worksheet_name):
@@ -66,41 +92,12 @@ def load_data_staff(worksheet_name):
     except Exception as e:
         st.error(f"Error: {e}")
         st.stop()
-def log_action(user, action, details="-"):
-    """
-    บันทึก Log การใช้งานลง Sheet 'logs'
-    user: ชื่อผู้ใช้งาน (เช่น 'Admin', 'Staff')
-    action: การกระทำ (เช่น 'Login', 'Register Patient')
-    details: รายละเอียดเพิ่มเติม (เช่น HN, Status)
-    """
-    try:
-        client = connect_to_gsheet()
-        sh = client.open_by_key(SHEET_ID)
-        
-        # พยายามเปิด Sheet logs ถ้าไม่มีให้สร้างใหม่ (Auto-create)
-        try:
-            worksheet = sh.worksheet(LOGS_SHEET_NAME)
-        except gspread.WorksheetNotFound:
-            worksheet = sh.add_worksheet(title=LOGS_SHEET_NAME, rows=1000, cols=4)
-            # สร้าง Header
-            worksheet.append_row(["Timestamp", "User", "Action", "Details"])
 
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # บันทึกข้อมูล
-        worksheet.append_row([timestamp, user, action, str(details)])
-        
-    except Exception as e:
-        # กรณี Log พัง ไม่ควรทำให้ระบบหลักพัง แค่ Print error ไว้ดู
-        print(f"⚠️ Logging Failed: {e}")
-        
-# ✅ ฟังก์ชันนี้คือจุดที่มักจะ Error (ผมเช็ค Comma ให้ครบแล้ว)
 def save_visit_data(data_dict):
     client = connect_to_gsheet()
     sh = client.open_by_key(SHEET_ID)
     worksheet = sh.worksheet("visits")
     
-    # ดึงค่าประเมิน (ถ้าไม่มีให้เป็น -)
     inhaler_result = data_dict.get("inhaler_eval", "-")
 
     row = [
@@ -117,14 +114,13 @@ def save_visit_data(data_dict):
         data_dict["next_appt"], 
         data_dict["note"], 
         data_dict["is_new_case"],
-        inhaler_result  # ✅ ต้องไม่มี Comma เกินหรือขาด
+        inhaler_result
     ]
     worksheet.append_row(row)
     load_data_staff.clear()
     load_data_fast.clear()
 
 def save_patient_data(data_dict):
-    """บันทึกข้อมูลผู้ป่วยใหม่"""
     try:
         client = connect_to_gsheet()
         sh = client.open_by_key(SHEET_ID)
@@ -141,10 +137,9 @@ def save_patient_data(data_dict):
             data_dict["best_pefr"], 
             data_dict["height"], 
             "Active",
-            data_dict.get("public_token", "")  # ✅ เพิ่ม Token คอลัมน์ที่ 9
+            data_dict.get("public_token", "")
         ]
         
-        # ✅ KEY FIX: ใช้ value_input_option='USER_ENTERED'
         worksheet.append_row(row, value_input_option='USER_ENTERED')
         
         load_data_staff.clear()
@@ -163,7 +158,6 @@ def update_patient_status(hn, new_status):
     try:
         cell = worksheet.find(str(hn))
         if cell:
-            # อัปเดตสถานะที่คอลัมน์ 8 (H) ของแถวนั้น
             worksheet.update_cell(cell.row, 8, new_status)
             load_data_staff.clear()
             load_data_fast.clear()
@@ -180,14 +174,12 @@ def update_patient_token(hn, token):
     worksheet = sh.worksheet("patients")
     
     try:
-        # Check Header at (1, 9) -> I
         header_cell = worksheet.cell(1, 9)
         if header_cell.value != "public_token":
             worksheet.update_cell(1, 9, "public_token")
 
         cell = worksheet.find(str(hn))
         if cell:
-            # อัปเดต Token ที่คอลัมน์ 9 (I)
             worksheet.update_cell(cell.row, 9, token)
             load_data_staff.clear()
             load_data_fast.clear()
@@ -199,10 +191,6 @@ def update_patient_token(hn, token):
         return False
 
 def save_multiple_visits(rows_list):
-    """
-    บันทึกข้อมูล Visit หลายรายการพร้อมกัน (Batch Insert)
-    rows_list: list of dict
-    """
     client = connect_to_gsheet()
     sh = client.open_by_key(SHEET_ID)
     worksheet = sh.worksheet("visits")
@@ -233,10 +221,6 @@ def save_multiple_visits(rows_list):
         load_data_fast.clear()
 
 def update_appointments_batch(updates_list):
-    """
-    อัปเดตวันนัดหมาย (Next Appt) ทีละหลายรายการ
-    updates_list: list of dict {'row': sheet_row_int, 'value': 'yyyy-mm-dd'}
-    """
     if not updates_list:
         return
 
@@ -244,11 +228,8 @@ def update_appointments_batch(updates_list):
     sh = client.open_by_key(SHEET_ID)
     worksheet = sh.worksheet("visits")
     
-    # สร้าง list ของ Cell object เพื่อ update ทีเดียว (ประหยัด Quota)
     cells_to_update = []
     for item in updates_list:
-        # Column 11 คือ next_appt (K)
-        # gspread ใช้ Row, Col (เริ่มที่ 1)
         cells_to_update.append(
             gspread.Cell(item['row'], 11, item['value'])
         )
@@ -256,5 +237,4 @@ def update_appointments_batch(updates_list):
     if cells_to_update:
         worksheet.update_cells(cells_to_update)
         load_data_staff.clear()
-
         load_data_fast.clear()
