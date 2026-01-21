@@ -7,14 +7,13 @@ import base64
 import uuid
 
 # Import Utils
-# ตรวจสอบ path ของ utils ให้ถูกต้องตามโครงสร้างโปรเจกต์ของคุณ
-from utils.gsheet_handler import save_patient_data, save_visit_data, update_patient_status, update_patient_token
+# ✅ 1. เพิ่ม log_action ในบรรทัดนี้
+from utils.gsheet_handler import save_patient_data, save_visit_data, update_patient_status, update_patient_token, log_action
 from utils.calculations import (
     calculate_predicted_pefr, get_action_plan_zone, get_percent_predicted,
     check_technique_status, plot_pefr_chart, generate_qr
 )
 
-# --- Helper Function: แปลง QR เป็น Base64 ---
 def get_base64_qr(data):
     qr = qrcode.QRCode(version=1, box_size=10, border=1)
     qr.add_data(data)
@@ -24,7 +23,6 @@ def get_base64_qr(data):
     img.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode()
 
-# --- 1. ฟังก์ชันลงทะเบียนผู้ป่วยใหม่ (พร้อม Data Validation) ---
 def render_register_patient(patients_db):
     st.title("➕ ลงทะเบียนผู้ป่วยรายใหม่")
     with st.form("register_form", clear_on_submit=True):
@@ -35,46 +33,32 @@ def render_register_patient(patients_db):
         reg_fname = col3.text_input("ชื่อจริง")
         reg_lname = col4.text_input("นามสกุล")
         col5, col6 = st.columns(2)
-        # กำหนด max_value เป็นวันนี้เพื่อกันการใส่วันเกิดในอนาคต
         reg_dob = col5.date_input("วันเกิด", min_value=datetime(1920, 1, 1), max_value=datetime.today())
         reg_height = col6.number_input("ส่วนสูง (cm)", 0, 300, 160)
         reg_best_pefr = st.number_input("Personal Best PEFR (ถ้ามี)", 0, 900, 0)
         
         if st.form_submit_button("✅ ลงทะเบียน"):
-            # --- 🛡️ VALIDATION START ---
             errors = []
-            
-            # 1. เช็คข้อมูลพื้นฐาน
             if not reg_hn_input or not reg_fname or not reg_lname:
                 errors.append("กรุณากรอกข้อมูลให้ครบถ้วน (HN, ชื่อ, นามสกุล)")
-            
-            # 2. เช็ค HN Format (ต้องเป็นตัวเลข)
             if reg_hn_input and not reg_hn_input.isdigit():
                 errors.append("HN ต้องเป็นตัวเลขเท่านั้น")
-
-            # 3. เช็คส่วนสูง (Range ที่เป็นไปได้)
             if reg_height < 50 or reg_height > 250:
                 errors.append(f"ส่วนสูงผิดปกติ ({reg_height} cm) ควรอยู่ระหว่าง 50 - 250 cm")
-
-            # 4. เช็ควันเกิด (กันเหนียวอีกชั้น)
             if reg_dob > date.today():
                 errors.append("วันเกิดห้ามเป็นอนาคต")
 
-            # ถ้ามี Error ให้แสดงและจบการทำงาน
             if errors:
                 for err in errors:
                     st.error(f"❌ {err}")
                 return
-            # --- 🛡️ VALIDATION END ---
 
             formatted_hn = str(reg_hn_input).strip().zfill(7)
             if formatted_hn in patients_db['hn'].values:
                 st.error(f"❌ HN {formatted_hn} มีอยู่ในระบบแล้ว")
                 return
             
-            # Generate Token ตั้งแต่ตอนสมัคร
             new_token = str(uuid.uuid4())
-            
             new_pt_data = {
                 "hn": formatted_hn, "prefix": reg_prefix, "first_name": reg_fname,
                 "last_name": reg_lname, "dob": str(reg_dob),
@@ -83,41 +67,29 @@ def render_register_patient(patients_db):
             }
             try:
                 save_patient_data(new_pt_data)
+                log_action("Admin", "Register Patient", f"HN: {formatted_hn}") # ✅ 2. Log ลงทะเบียน
                 st.success(f"🎉 ลงทะเบียนสำเร็จ!")
             except Exception as e:
                 st.error(f"Error: {e}")
 
-# --- 2. ฟังก์ชันค้นหาและจัดการผู้ป่วย (Main Staff View) ---
 def render_search_patient(patients_db, visits_db, base_url):
     
-    # ==========================================
-    # 🛠️ SESSION STATE MANAGEMENT (DELAYED RESET)
-    # ==========================================
-    # ตรวจสอบ Flag ว่าต้องเคลียร์ค่า Checkbox หรือไม่ (จากการกดบันทึกรอบที่แล้ว)
     if st.session_state.get('reset_visit_form', False):
-        # รีเซ็ต Checkbox หลัก (การประเมินเทคนิค)
         if 'assess_toggle' in st.session_state:
             st.session_state['assess_toggle'] = False
-        
-        # รีเซ็ต Checkbox ย่อยทั้งหมด
         keys_to_clear = [k for k in st.session_state.keys() if k.startswith('step_') or k.startswith('adv_')]
         for k in keys_to_clear:
             del st.session_state[k]
-            
-        # ปิด Flag เพื่อให้รอบต่อไปทำงานปกติ
         st.session_state['reset_visit_form'] = False
-    # ==========================================
 
     hn_list = patients_db['hn'].unique().tolist()
     hn_list.sort()
     selected_hn = st.sidebar.selectbox("เลือกผู้ป่วย", hn_list)
     
     if selected_hn:
-        # เตรียมข้อมูลคนไข้
         pt_data = patients_db[patients_db['hn'] == selected_hn].iloc[0]
         pt_visits = visits_db[visits_db['hn'] == selected_hn]
         
-        # --- จัดการสถานะ ---
         current_status = pt_data.get('status', 'Active')
         if pd.isna(current_status) or str(current_status).strip() == "":
             current_status = "Active"
@@ -126,20 +98,17 @@ def render_search_patient(patients_db, visits_db, base_url):
         if current_status == "Discharge": status_color = "grey"
         elif current_status == "COPD": status_color = "orange"
 
-        # --- ✅ Security: ตรวจสอบ/สร้าง Token (ถ้าไม่มี) ---
         public_token = pt_data.get('public_token', '')
-        # ถ้า Token ว่าง หรือเป็น NaN ให้สร้างใหม่
         if pd.isna(public_token) or str(public_token).strip() == "" or str(public_token).lower() == "nan":
             with st.spinner("Creating Secure Token..."):
                 new_token = str(uuid.uuid4())
                 if update_patient_token(selected_hn, new_token):
-                    # อัปเดตตัวแปร public_token ทันทีเพื่อให้ใช้งานต่อได้เลย
+                    log_action("Admin", "Generate Token", f"HN: {selected_hn}") # ✅ 3. Log สร้าง Token
                     public_token = new_token
-                    st.rerun() # รีโหลดเพื่อดึงข้อมูลใหม่
+                    st.rerun()
                 else:
                     st.error("Failed to generate token")
 
-        # ส่วน Header ข้อมูลคนไข้
         c_head, c_status = st.columns([3, 1])
         with c_head:
             st.title(f"{pt_data['prefix']}{pt_data['first_name']} {pt_data['last_name']}")
@@ -158,6 +127,7 @@ def render_search_patient(patients_db, visits_db, base_url):
                 if st.button("บันทึกการเปลี่ยนสถานะ"):
                     with st.spinner("กำลังอัปเดต..."):
                         if update_patient_status(selected_hn, new_status):
+                            log_action("Admin", "Update Status", f"HN: {selected_hn} -> {new_status}") # ✅ 4. Log เปลี่ยนสถานะ
                             st.success(f"เปลี่ยนสถานะเป็น {new_status} เรียบร้อย!")
                             st.rerun()
 
@@ -173,7 +143,6 @@ def render_search_patient(patients_db, visits_db, base_url):
         c3.metric("ส่วนสูง", f"{height} cm")
         c4.metric("Standard PEFR", f"{int(predicted_pefr)}")
 
-        # --- Smart Form Variables ---
         controller_options = ["Seretide", "Budesonide", "Symbicort"]
         reliever_options = ["Salbutamol", "Berodual"]
         default_controllers = []
@@ -192,9 +161,6 @@ def render_search_patient(patients_db, visits_db, base_url):
             default_controllers = parse_meds(last_actual_visit.get('controller'), controller_options)
             default_relievers = parse_meds(last_actual_visit.get('reliever'), reliever_options)
 
-            # ------------------------------------------------------------------
-            # ✅ ส่วนแสดงสถานะล่าสุด (Action Plan Summary)
-            # ------------------------------------------------------------------
             st.markdown("---")
             valid_pefr_visits = pt_visits_sorted[pt_visits_sorted['pefr'] > 0]
             
@@ -208,7 +174,6 @@ def render_search_patient(patients_db, visits_db, base_url):
                 
                 st.info(f"📋 **สถานะล่าสุด ({visit_date_str})**")
                 
-                # แจ้งเตือนถ้าข้อมูลไม่ตรงกับวันล่าสุดจริง (กรณีญาติรับยา)
                 if last_actual_visit['date'] != last_valid_visit['date']:
                     last_actual_str = last_actual_visit['date'].strftime('%d/%m/%Y')
                     st.caption(f"ℹ️ (ล่าสุดเมื่อ {last_actual_str} ไม่ได้เป่า Peak Flow ระบบจึงแสดงผลจากครั้งก่อนหน้า)")
@@ -217,40 +182,21 @@ def render_search_patient(patients_db, visits_db, base_url):
                 s1.metric("PEFR ล่าสุด", f"{current_pefr}")
                 s2.metric("% มาตรฐาน", f"{pct_std}%")
                 
-                # --- ช่อง Zone ---
                 with s3:
                     st.markdown(f"""
-                        <div style="display: flex; flex-direction: column; justify-content: flex-start;">
-                            <span style="font-size: 14px; color: #606570; margin-bottom: 4px;">Zone</span>
-                            <div style="
-                                background-color: {zone_color}15;
-                                color: {zone_color};
-                                border: 1px solid {zone_color};
-                                padding: 6px 10px;
-                                border-radius: 20px; 
-                                text-align: center;
-                                font-weight: 600;
-                                font-size: 15px;
-                                line-height: 1.2;
-                                white-space: nowrap;
-                                overflow: hidden;
-                                text-overflow: ellipsis;
-                            ">
-                                {zone_name}
-                            </div>
+                        <div style="display: flex; flex-direction: column;">
+                            <span style="font-size: 14px; color: #606570;">Zone</span>
+                            <div style="background-color: {zone_color}15; color: {zone_color}; border: 1px solid {zone_color}; padding: 6px 10px; border-radius: 20px; text-align: center; font-weight: 600;">{zone_name}</div>
                         </div>
                     """, unsafe_allow_html=True)
                 
-                # --- ช่อง Control Level (HTML Badge) ---
                 with s4:
                     raw_ctrl = last_valid_visit.get('control_level', '-')
-                    
                     if pd.isna(raw_ctrl) or str(raw_ctrl).strip() in ['', 'nan', 'None']:
                         ctrl_lvl = "-"
                     else:
                         ctrl_lvl = str(raw_ctrl).strip()
 
-                    # Logic สีป้าย
                     if "Uncontrolled" in ctrl_lvl:
                         c_color = "#EF4444"
                         display_text = ctrl_lvl
@@ -265,23 +211,9 @@ def render_search_patient(patients_db, visits_db, base_url):
                         display_text = "รอประเมิน" if ctrl_lvl == "-" else ctrl_lvl
 
                     st.markdown(f"""
-                        <div style="display: flex; flex-direction: column; justify-content: flex-start;">
-                            <span style="font-size: 14px; color: #606570; margin-bottom: 4px;">Control Level</span>
-                            <div style="
-                                background-color: {c_color}15;
-                                color: {c_color};
-                                border: 1px solid {c_color};
-                                padding: 6px 10px;
-                                border-radius: 20px; 
-                                text-align: center;
-                                font-weight: 600;
-                                font-size: 14px;
-                                white-space: nowrap;
-                                overflow: hidden;
-                                text-overflow: ellipsis;
-                            ">
-                                {display_text}
-                            </div>
+                        <div style="display: flex; flex-direction: column;">
+                            <span style="font-size: 14px; color: #606570;">Control Level</span>
+                            <div style="background-color: {c_color}15; color: {c_color}; border: 1px solid {c_color}; padding: 6px 10px; border-radius: 20px; text-align: center; font-weight: 600;">{display_text}</div>
                         </div>
                     """, unsafe_allow_html=True)
 
@@ -292,7 +224,6 @@ def render_search_patient(patients_db, visits_db, base_url):
             if last_drp and last_drp != "-" and last_drp.lower() != "nan":
                 st.warning(f"⚠️ **DRP ครั้งล่าสุด:** {last_drp}")
 
-            # Check Technique Status
             tech_status, tech_days, tech_last_date = check_technique_status(pt_visits)
             st.write("") 
             if tech_status == "overdue":
@@ -327,12 +258,8 @@ def render_search_patient(patients_db, visits_db, base_url):
         inhaler_summary_text = "-" 
         tech_check_status = "ไม่"
 
-        # =================================================================
-        # 🟢 ส่วนการประเมินเทคนิคพ่นยา (Optional) - Session State Aware
-        # =================================================================
         with st.container(border=True):
             st.markdown("##### 🎯 การประเมินเทคนิคพ่นยา (Optional)")
-            # ใช้ Key เพื่อให้ Session State จำค่าได้
             is_teach_and_assess = st.checkbox("✅ ต้องการสอน/ประเมินเทคนิคพ่นยาในครั้งนี้", key="assess_toggle")
 
             if is_teach_and_assess:
@@ -352,7 +279,6 @@ def render_search_patient(patients_db, visits_db, base_url):
                 cols_check = st.columns(2)
                 for i, step in enumerate(steps):
                     with cols_check[i % 2]:
-                        # ใช้ Key ย่อยเพื่อให้จำสถานะการติ๊กได้
                         checks.append(st.checkbox(step, value=True, key=f"step_{i}"))
 
                 score = sum(checks)
@@ -385,9 +311,6 @@ def render_search_patient(patients_db, visits_db, base_url):
                 if adv_rinse: inhaler_summary_text += " | Adv:Rinse"
                 if adv_clean: inhaler_summary_text += " | Adv:Clean"
 
-        # =================================================================
-        # 📝 ฟอร์มบันทึกข้อมูลหลัก (clear_on_submit=True)
-        # =================================================================
         with st.form("new_visit", clear_on_submit=True):
             col_a, col_b = st.columns(2)
             v_date = col_a.date_input("วันที่", value=date.today())
@@ -396,7 +319,6 @@ def render_search_patient(patients_db, visits_db, base_url):
                 v_pefr = st.number_input("PEFR (L/min)", 0, 999, step=10)
                 v_no_pefr = st.checkbox("ไม่ได้เป่า Peak Flow (N/A)")
             
-            # ปรับ Radio เป็นชื่อใหม่ (Well Controlled)
             v_control = st.radio(
                 "Control Level", 
                 ["Well Controlled", "Partly Controlled", "Uncontrolled"], 
@@ -420,23 +342,18 @@ def render_search_patient(patients_db, visits_db, base_url):
             v_next = st.date_input("นัดถัดไป", value=date.today() + timedelta(days=90))
             
             if st.form_submit_button("💾 บันทึกข้อมูล"):
-                # --- 🛡️ VALIDATION START ---
                 visit_errors = []
-                
-                # 1. เช็ควันที่นัด
                 if v_next < v_date:
                     visit_errors.append(f"วันนัดถัดไป ({v_next}) ต้องไม่ใช่อดีต (ก่อนวันที่ตรวจ {v_date})")
                 elif v_next == v_date:
                     st.warning("⚠️ วันนัดถัดไปเป็นวันเดียวกับวันนี้ (ตรวจสอบว่าถูกต้องหรือไม่)")
 
-                # 2. เช็ค PEFR
                 if not v_no_pefr:
                     if v_pefr == 0:
                         visit_errors.append("ค่า PEFR เป็น 0 (ถ้าไม่ได้เป่า ให้ติ๊กช่อง 'ไม่ได้เป่า')")
                     elif v_pefr > 900:
                         visit_errors.append(f"ค่า PEFR สูงผิดปกติ ({v_pefr}) กรุณาตรวจสอบ")
                 
-                # 3. เช็คความสอดคล้อง (ถ้าญาติรับยา ไม่ควรมี PEFR หรือควรเป็นค่าเก่า)
                 if v_relative_pickup and not v_no_pefr and v_pefr > 0:
                     st.warning("⚠️ แจ้งเตือน: ญาติรับยาแต่มีการกรอกค่า PEFR (คนไข้มาด้วยหรือไม่?)")
 
@@ -444,7 +361,6 @@ def render_search_patient(patients_db, visits_db, base_url):
                     for err in visit_errors:
                         st.error(f"❌ {err}")
                     return
-                # --- 🛡️ VALIDATION END ---
 
                 actual_pefr = 0 if v_no_pefr else v_pefr
                 actual_adherence = 0 if v_relative_pickup else v_adh
@@ -465,8 +381,8 @@ def render_search_patient(patients_db, visits_db, base_url):
                 
                 try:
                     save_visit_data(new_data)
+                    log_action("Admin", "Record Visit", f"HN: {selected_hn}, Date: {v_date}") # ✅ 5. Log บันทึก Visit
                     
-                    # ✅ TRIGGER RESET: ตั้งค่า Flag เพื่อให้รอบหน้าล้างค่า Checkbox
                     st.session_state['reset_visit_form'] = True
                     
                     st.success("บันทึกสำเร็จ")
@@ -474,16 +390,10 @@ def render_search_patient(patients_db, visits_db, base_url):
                 except Exception as e:
                     st.error(f"เกิดข้อผิดพลาดในการบันทึก: {e}")
 
-        # ==============================================================================
-        # 📇 DIGITAL ASTHMA CARD (พร้อม HTML/CSS สวยงาม)
-        # ==============================================================================
         st.divider()
         st.subheader("📇 Digital Asthma Card")
-        
-        # สร้าง Link โดยใช้ Token
         link = f"{base_url}/?token={public_token}"
         
-        # 1. เตรียมข้อมูลสำหรับบัตร
         card_best_pefr = int(predicted_pefr)
         if card_best_pefr == 0:
             card_best_pefr = pt_data.get('best_pefr', 0)
@@ -497,17 +407,15 @@ def render_search_patient(patients_db, visits_db, base_url):
         else:
             txt_g, txt_y, txt_r = "-", "-", "-"
 
-        # 2. สร้าง QR Code Base64
         qr_b64 = get_base64_qr(link)
 
-        # 3. HTML/CSS Style
         card_html = f"""
         <style>
             .asthma-card {{
                 position: relative;
                 width: 100%;
                 max-width: 420px;
-                padding-top: 63%; /* Aspect Ratio 1.58:1 */
+                padding-top: 63%; 
                 background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
                 border-radius: 16px;
                 box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
@@ -601,7 +509,6 @@ def render_search_patient(patients_db, visits_db, base_url):
         </div>
         """
         
-        # แสดงผลการ์ด
         c_main, c_dummy = st.columns([1.5, 1])
         with c_main:
             st.markdown(card_html, unsafe_allow_html=True)
