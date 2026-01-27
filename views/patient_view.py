@@ -42,9 +42,42 @@ def render_patient_view(target_hn, patients_db, visits_db):
             c2.markdown(f"**อายุ:** {age} ปี")
             st.info(f"🎯 **เป้าหมาย PEFR ของคุณ:** {int(ref_pefr)} L/min")
 
+        # ✅ เพิ่มส่วนแสดงยาที่ใช้ปัจจุบัน (Current Medication)
+        if not pt_visits.empty:
+            # เรียงตามวันที่เพื่อเอาข้อมูลล่าสุด
+            last_visit_any = pt_visits.sort_values(by="date").iloc[-1]
+            
+            # ดึงข้อมูลยาและทำความสะอาดข้อมูล
+            curr_controller = str(last_visit_any.get('controller', '-')).strip()
+            curr_reliever = str(last_visit_any.get('reliever', '-')).strip()
+            
+            if curr_controller in ['nan', 'None', '']: curr_controller = "-"
+            if curr_reliever in ['nan', 'None', '']: curr_reliever = "-"
+            
+            # แสดงผลเฉพาะเมื่อมีข้อมูลยา
+            if curr_controller != "-" or curr_reliever != "-":
+                with st.container(border=True):
+                    st.markdown("##### 💊 ยาที่ใช้ปัจจุบัน")
+                    mc1, mc2 = st.columns(2)
+                    with mc1:
+                        st.caption("ยาควบคุมอาการ (Controller)")
+                        if curr_controller != "-":
+                            st.success(f"**{curr_controller}**")
+                        else:
+                            st.markdown("-")
+                    with mc2:
+                        st.caption("ยาฉุกเฉิน (Reliever)")
+                        if curr_reliever != "-":
+                            st.warning(f"**{curr_reliever}**")
+                        else:
+                            st.markdown("-")
+
         # --- ส่วนวันนัดหมาย ---
         if not pt_visits.empty:
-            last_visit_any = pt_visits.sort_values(by="date").iloc[-1]
+            # ใช้ last_visit_any จากด้านบน (หรือหาใหม่ถ้ายังไม่มี)
+            if 'last_visit_any' not in locals():
+                last_visit_any = pt_visits.sort_values(by="date").iloc[-1]
+                
             next_appt = str(last_visit_any.get('next_appt', '-')).strip()
             
             if next_appt and next_appt not in ['-', '', 'nan', 'None']:
