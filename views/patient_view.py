@@ -42,19 +42,18 @@ def render_patient_view(target_hn, patients_db, visits_db):
             c2.markdown(f"**อายุ:** {age} ปี")
             st.info(f"🎯 **เป้าหมาย PEFR ของคุณ:** {int(ref_pefr)} L/min")
 
-        # ✅ เพิ่มส่วนแสดงยาที่ใช้ปัจจุบัน (Current Medication)
+        # --- ส่วนข้อมูลจาก Visit ล่าสุด (ยา & คำแนะนำ) ---
         if not pt_visits.empty:
             # เรียงตามวันที่เพื่อเอาข้อมูลล่าสุด
             last_visit_any = pt_visits.sort_values(by="date").iloc[-1]
             
-            # ดึงข้อมูลยาและทำความสะอาดข้อมูล
+            # 1. ยาที่ใช้ปัจจุบัน (Current Medication)
             curr_controller = str(last_visit_any.get('controller', '-')).strip()
             curr_reliever = str(last_visit_any.get('reliever', '-')).strip()
             
             if curr_controller in ['nan', 'None', '']: curr_controller = "-"
             if curr_reliever in ['nan', 'None', '']: curr_reliever = "-"
             
-            # แสดงผลเฉพาะเมื่อมีข้อมูลยา
             if curr_controller != "-" or curr_reliever != "-":
                 with st.container(border=True):
                     st.markdown("##### 💊 ยาที่ใช้ปัจจุบัน")
@@ -71,6 +70,17 @@ def render_patient_view(target_hn, patients_db, visits_db):
                             st.warning(f"**{curr_reliever}**")
                         else:
                             st.markdown("-")
+            
+            # ✅ 2. เพิ่มส่วนแสดง Advice (คำแนะนำจากเภสัชกร)
+            # พยายามดึงจาก key 'note' หรือ 'advice'
+            curr_advice = str(last_visit_any.get('note', '-')).strip()
+            if curr_advice in ['-', '', 'nan', 'None']:
+                curr_advice = str(last_visit_any.get('advice', '-')).strip()
+            
+            if curr_advice not in ['-', '', 'nan', 'None']:
+                with st.container(border=True):
+                    st.markdown("##### 💬 คำแนะนำจากเภสัชกร (ล่าสุด)")
+                    st.info(f"ℹ️ {curr_advice}")
 
         # --- ส่วนวันนัดหมาย ---
         if not pt_visits.empty:
@@ -135,7 +145,7 @@ def render_patient_view(target_hn, patients_db, visits_db):
                     msg = f"ผ่านมาแล้ว {days_passed} วัน (เหลือเวลาอีก {days_remaining} วัน จะครบ 1 ปี)"
                     st.progress(progress_val, text=msg)
 
-        # --- ✅ ผลการประเมินล่าสุด (Logic กรอง 0 ออก) ---
+        # --- ผลการประเมินล่าสุด (Logic กรอง 0 ออก) ---
         if not pt_visits.empty:
             pt_visits['date'] = pd.to_datetime(pt_visits['date'])
             sorted_visits = pt_visits.sort_values(by="date")
@@ -169,9 +179,8 @@ def render_patient_view(target_hn, patients_db, visits_db):
                 </div>
                 """, unsafe_allow_html=True)
 
-                # ปุ่ม Action และคำแนะนำ (เพิ่ม Green Zone)
+                # ปุ่ม Action และคำแนะนำ
                 if "Green" in zone_name:
-                    # ✅ เพิ่มคำแนะนำ MDI สำหรับ Green Zone
                     with st.expander("📢 วิธีใช้ยาพ่นฉุกเฉิน (MDI) ที่ถูกต้อง (คลิก)"):
                         st.markdown("""
                         **ขั้นตอนการพ่นยา:**
