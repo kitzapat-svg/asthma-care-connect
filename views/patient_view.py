@@ -79,7 +79,7 @@ def render_patient_view(target_hn, patients_db, visits_db):
             
             if curr_advice not in ['-', '', 'nan', 'None']:
                 with st.container(border=True):
-                    st.markdown("##### 💬 บันทึกจากเจ้าหน้าที่ (ล่าสุด)")
+                    st.markdown("##### 💬 คำแนะนำเภสัชกร (ล่าสุด)")
                     st.info(f"ℹ️ {curr_advice}")
 
         # --- ส่วนวันนัดหมาย ---
@@ -261,5 +261,6 @@ def render_patient_view(target_hn, patients_db, visits_db):
 
     else:
         st.error("❌ ไม่พบข้อมูลผู้ป่วยรายนี้")
+
 
 
