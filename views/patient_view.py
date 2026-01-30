@@ -73,7 +73,7 @@ def render_patient_view(target_hn, patients_db, visits_db):
             
             # ✅ 2. เพิ่มส่วนแสดง Advice (คำแนะนำจากเภสัชกร)
             # พยายามดึงจาก key 'note' หรือ 'advice'
-            curr_advice = str(last_visit_any.get('note', '-')).strip()
+            curr_advice = str(last_visit_any.get('advice', '-')).strip()
             if curr_advice in ['-', '', 'nan', 'None']:
                 curr_advice = str(last_visit_any.get('advice', '-')).strip()
             
@@ -261,4 +261,5 @@ def render_patient_view(target_hn, patients_db, visits_db):
 
     else:
         st.error("❌ ไม่พบข้อมูลผู้ป่วยรายนี้")
+
 
