@@ -3,6 +3,7 @@ import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime  # ✅ 1. เพิ่มบรรทัดนี้
+import uuid
 
 # --- CONFIGURATION ---
 SHEET_ID = "1LF9Yi6CXHaiITVCqj9jj1agEdEE9S-37FwnaxNIlAaE"
@@ -238,3 +239,56 @@ def update_appointments_batch(updates_list):
         worksheet.update_cells(cells_to_update)
         load_data_staff.clear()
         load_data_fast.clear()
+
+# ✅ เพิ่มฟังก์ชันนี้ต่อท้ายไฟล์
+def generate_missing_tokens_batch():
+    """
+    สแกนหาผู้ป่วยที่ยังไม่มี Token และสร้างให้ใหม่พร้อมกันทีเดียว (Batch Update)
+    """
+    client = connect_to_gsheet()
+    sh = client.open_by_key(SHEET_ID)
+    worksheet = sh.worksheet(PATIENTS_SHEET_NAME)
+    
+    # 1. ดึงข้อมูลทั้งหมดมาตรวจสอบ (Get All Values)
+    # เราดึงแบบ raw values เพื่อหาบรรทัดที่ว่าง
+    all_values = worksheet.get_all_values()
+    
+    # Header อยู่ row 1, Data เริ่ม row 2
+    # สมมติว่า Token อยู่ Column I (index 8) ตาม logic ของ update_patient_token
+    token_col_index = 8 
+    
+    cells_to_update = []
+    updated_count = 0
+    
+    # ตรวจสอบ Header ก่อนว่ามีคอลัมน์ Token ไหม ถ้าไม่มีให้เติม
+    if len(all_values[0]) <= token_col_index or all_values[0][token_col_index] != "public_token":
+        worksheet.update_cell(1, token_col_index + 1, "public_token")
+    
+    # 2. Loop เช็คทีละแถว (เริ่มที่ index 1 คือ row 2)
+    for i, row in enumerate(all_values[1:]):
+        current_row_num = i + 2  # Excel Row Number
+        
+        # เช็คว่า list row ยาวไม่ถึง col token หรือ ค่าใน col token ว่าง
+        has_token = False
+        if len(row) > token_col_index:
+            val = row[token_col_index].strip()
+            if val and val.lower() != 'nan':
+                has_token = True
+        
+        if not has_token:
+            new_token = str(uuid.uuid4())
+            # สร้าง Object Cell เพื่อเตรียม update (row, col, value)
+            # col ใน gspread เริ่มที่ 1 ดังนั้น index 8 = col 9
+            cells_to_update.append(
+                gspread.Cell(current_row_num, token_col_index + 1, new_token)
+            )
+            updated_count += 1
+            
+    # 3. สั่ง Update ทีเดียว (Batch Update)
+    if cells_to_update:
+        worksheet.update_cells(cells_to_update)
+        # Clear Cache เพื่อให้ข้อมูลใหม่แสดงผลทันที
+        load_data_staff.clear()
+        load_data_fast.clear()
+        
+    return updated_count
