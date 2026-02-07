@@ -4,6 +4,7 @@ import altair as alt
 from datetime import datetime, timedelta
 import io
 from utils.style import load_custom_css
+from utils.gsheet_handler import log_action, generate_missing_tokens_batch
 
 load_custom_css()
 
@@ -340,3 +341,49 @@ def render_dashboard(visits_df, patients_df):
         type="primary",
         help="คลิกเพื่อดาวน์โหลดข้อมูลทั้งหมดลงเครื่องคอมพิวเตอร์"
     )
+
+# ==============================================================================
+    # 🛠️ ส่วนที่ 8: จัดการระบบ (System Maintenance)
+    # ==============================================================================
+    st.divider()
+    st.subheader("🛠️ 8. จัดการระบบ (System Maintenance)")
+    
+    col_sys1, col_sys2 = st.columns([1, 1])
+    
+    with col_sys1:
+        st.markdown("**สถานะ Token ผู้ป่วย (Digital Card)**")
+        
+        # คำนวณหาคนที่ยังไม่มี Token
+        if 'public_token' not in patients_df.columns:
+            # ถ้าไม่มีคอลัมน์เลย แปลว่าทุกคนไม่มี Token
+            missing_count = len(patients_df)
+        else:
+            # นับคนที่ Token เป็นว่าง, NaN, หรือ None
+            missing_token_df = patients_df[
+                patients_df['public_token'].isna() | 
+                (patients_df['public_token'].astype(str).str.strip() == "") |
+                (patients_df['public_token'].astype(str).str.lower() == "nan")
+            ]
+            missing_count = len(missing_token_df)
+            
+        if missing_count > 0:
+            st.warning(f"⚠️ พบผู้ป่วย **{missing_count}** ราย ยังไม่มี Token สำหรับเข้าดู Digital Card")
+            
+            if st.button("⚡ สร้าง Token ให้ทุกคนทันที (One-click)", type="primary"):
+                with st.spinner("กำลังสร้าง Token และบันทึกลง Google Sheets..."):
+                    try:
+                        processed_count = generate_missing_tokens_batch()
+                        log_action("Admin", "Batch Generate Tokens", f"Created {processed_count} tokens")
+                        st.success(f"✅ สร้าง Token สำเร็จจำนวน {processed_count} รายการ!")
+                        st.balloons()
+                        # หน่วงเวลาเล็กน้อยแล้วโหลดหน้าใหม่
+                        import time
+                        time.sleep(1.5)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"เกิดข้อผิดพลาด: {e}")
+        else:
+            st.success("✅ ผู้ป่วยทุกคนมี Token ครบถ้วนแล้ว")
+
+    with col_sys2:
+        st.info("💡 **Tips:** การกดปุ่มสร้าง Token จะช่วยให้ผู้ป่วยรายเก่าสามารถสแกน QR Code เดิมเพื่อดูข้อมูลล่าสุดได้ทันที โดยไม่ต้องรอให้เจ้าหน้าที่กดเข้าไปดูหน้าประวัติทีละคน")
